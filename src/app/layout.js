@@ -9,15 +9,7 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="absolute inset-0 flex flex-col">
-        <header className="h-12">
-          <nav className="h-full flex gap-4 items-center mx-4">
-            <a href="/">Home</a>
-            <a href="/blog">Blog</a>
-          </nav>
-        </header>
-        {children}
-      </body>
+      <body className="absolute inset-0 flex flex-col">{children}</body>
     </html>
   );
 }
