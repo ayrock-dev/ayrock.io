@@ -1,0 +1,4 @@
+.wrangler/
+
+src/lib/schema.json
+src/lib/schema.d.ts

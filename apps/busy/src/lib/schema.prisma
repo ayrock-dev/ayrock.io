@@ -1,0 +1,39 @@
+// use prisma-next
+
+model User {
+  id          String       @id
+  created_at  DateTime     @default(now())
+  updated_at  temporal.updatedAt()
+  devices     Device[]
+  connections Connection[]
+
+  @@map("ayrock.busy.user")
+}
+
+model Device {
+  id          String    @id
+  created_at  DateTime  @default(now())
+  updated_at  temporal.updatedAt()
+  name        String?
+  accessToken String?
+  expiresAt   DateTime?
+  user        User      @relation(fields: [userId], references: [id])
+  userId      String
+
+  @@map("ayrock.busy.device")
+}
+
+model Connection {
+  id           String    @id
+  created_at   DateTime  @default(now())
+  updated_at   temporal.updatedAt()
+  type         String
+  accessToken  String?
+  refreshToken String?
+  expiresAt    DateTime?
+  user         User      @relation(fields: [userId], references: [id])
+  userId       String
+
+  @@unique([userId, type])
+  @@map("ayrock.busy.connection")
+}

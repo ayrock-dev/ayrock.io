@@ -1,0 +1,21 @@
+{
+  "name": "ayrock",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm -r dev",
+    "build": "pnpm -r build",
+    "db:generate": "pnpm -r db:generate",
+    "format": "biome format .",
+    "lint": "biome lint .",
+    "check": "biome check .",
+    "check:fix": "biome check --fix --unsafe ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:"
+  },
+  "volta": {
+    "node": "24.15.0"
+  }
+}
