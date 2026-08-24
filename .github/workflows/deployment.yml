@@ -1,0 +1,98 @@
+name: 🚀 Deploy
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 🔬 Lint & 📐 Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v4
+
+      - name: ⎔ Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.15
+
+      - name: 🟨 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 📥 Install deps
+        run: pnpm install
+
+      - name: 🔬 Lint & 📐 Format
+        run: pnpm run check
+
+  build-busy:
+    name: 🛠️ Build @ayrock/busy
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v4
+
+      - name: ⎔ Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.15
+
+      - name: 🟨 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 📥 Install deps
+        run: pnpm install
+
+      - name: 🧬 Generate Prisma client
+        run: pnpm --filter @ayrock/busy run db:generate
+
+      - name: 🔎 Typecheck
+        run: pnpm --filter @ayrock/busy run typecheck
+
+      - name: 🛠️ Build
+        run: pnpm --filter @ayrock/busy run build
+
+  deploy-busy:
+    name: 🚀 Deploy @ayrock/busy
+    runs-on: ubuntu-latest
+    needs: [build-busy]
+    if: ${{ github.ref == 'refs/heads/main' }}
+    steps:
+      - name: ⬇️ Checkout repo
+        uses: actions/checkout@v4
+
+      - name: ⎔ Setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.15
+
+      - name: 🟨 Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 📥 Install deps
+        run: pnpm install
+
+      - name: 🧬 Generate Prisma client
+        run: pnpm --filter @ayrock/busy run db:generate
+
+      - name: ☁️ Deploy To Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: "./apps/busy"
+          packageManager: pnpm

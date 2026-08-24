@@ -1,0 +1,11 @@
+name = "busy"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "busy.ayrock.io"
+custom_domain = true
+
+[triggers]
+crons = ["* * * * *"]
