@@ -10,12 +10,12 @@ This application is a monorepo and uses [pnpm](https://pnpm.io) as a package man
 
 |App|README|
 |---|---|
-|@ayrock/busy|[README](/apps/busy/README.md)|
-|@ayrock/web|[README](/apps/web/README.md)|
+|@ayrock/busy|[README](./apps/busy/README.md)|
+|@ayrock/web|[README](./apps/web/README.md)|
 
 ## Quickstart
 
-```
+```bash
 pnpm i
 pnpm run dev
 ```
