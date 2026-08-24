@@ -13,5 +13,5 @@ An API powering a custom [Busy Bar](https://busy.app/) integration.
 ## Quickstart
 
 ```sh
-pnpm run dev -f @ayrock/busy
+pnpm --filter `@ayrock/busy` run dev
 ```

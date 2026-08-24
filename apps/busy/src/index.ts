@@ -8,25 +8,23 @@ import * as devices from './features/devices';
 import * as spotify_api from './features/spotify';
 import { DEFAULT_USER_ID, ensure_default } from './features/users';
 import * as workflow from './features/workflow';
-import { parse_env, spotify_redirect_uri, workflow_url } from './lib/env';
+import {
+  type Env,
+  parse_env,
+  spotify_redirect_uri,
+  workflow_url,
+} from './lib/env';
 import { busy_event_schema } from './lib/events';
 import { with_db } from './lib/prisma';
 import { make_qstash } from './lib/upstash';
 import { render_page } from './ui';
 
-type Env = {
-  API_HOST?: string;
-  SPOTIFY_CLIENT_ID?: string;
-  SPOTIFY_CLIENT_SECRET?: string;
-};
-
 const app = new Hono<{ Bindings: Env }>();
 const api = new Hono<{ Bindings: Env }>();
 
 function spotify_config(env: Env): spotify_api.config | null {
-  const redirect_uri = spotify_redirect_uri(env.API_HOST);
-  if (!env.SPOTIFY_CLIENT_ID || !env.SPOTIFY_CLIENT_SECRET || !redirect_uri)
-    return null;
+  const redirect_uri = spotify_redirect_uri(env);
+
   return {
     client_id: env.SPOTIFY_CLIENT_ID,
     client_secret: env.SPOTIFY_CLIENT_SECRET,
@@ -156,8 +154,7 @@ api.post('/ingest/debug', async (c) => {
   const event = debug.ingest(parsed.data);
   const env = parse_env(c.env);
   const qstash = make_qstash(env);
-  const url =
-    workflow_url(env) ?? `${new URL(c.req.url).origin}/api/workflows/event`;
+  const url = workflow_url(env) ?? `${env.API_HOST}/api/workflows/event`;
   c.executionCtx.waitUntil(workflow.enqueue(qstash, url, event));
   return c.json({ queued: event.device_id }, 202);
 });

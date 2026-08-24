@@ -26,6 +26,6 @@ Run these commands to validate changes:
 
 | Command | Description |
 |---|---|
-| `pnpm run build` | Build all projects (apps/web, apps/api) |
+| `pnpm run build` | Build across all packages |
 | `pnpm run check` | Lint and formatting checks across all packages |
 | `pnpm run check:fix` | **Preferred** — runs checks and auto-fixes where possible |
