@@ -8,11 +8,18 @@ export type spotify_auth = {
   expires_at?: number;
 };
 
+export type poll_state = {
+  event_id: string | null;
+  next_event_at: number | null;
+};
+
 export type connection = {
   id: string;
   type: string;
   user_id: string;
   spotify_auth?: spotify_auth;
+  event_id?: string;
+  next_event_at?: number;
 };
 
 type connection_row = {
@@ -22,6 +29,8 @@ type connection_row = {
   accessToken: string | null;
   refreshToken: string | null;
   expiresAt: Date | null;
+  eventId: string | null;
+  nextEventAt: Date | null;
 };
 
 function to_connection(row: connection_row): connection {
@@ -32,6 +41,8 @@ function to_connection(row: connection_row): connection {
       access_token: row.accessToken ?? undefined,
       expires_at: row.expiresAt !== null ? row.expiresAt.getTime() : undefined,
     };
+  if (row.eventId !== null) base.event_id = row.eventId;
+  if (row.nextEventAt !== null) base.next_event_at = row.nextEventAt.getTime();
   return base;
 }
 
@@ -48,8 +59,51 @@ async function read_all(
         'accessToken',
         'refreshToken',
         'expiresAt',
+        'eventId',
+        'nextEventAt',
       )
       .where((f, fns) => fns.eq(f.userId, user_id))
+      .build(),
+  );
+}
+
+export async function get_by_id(
+  rt: DbRuntime,
+  id: string,
+): Promise<connection | null> {
+  const rows = await rt.query(
+    db.sql.public['ayrock.busy.connection']
+      .select(
+        'id',
+        'type',
+        'userId',
+        'accessToken',
+        'refreshToken',
+        'expiresAt',
+        'eventId',
+        'nextEventAt',
+      )
+      .where((f, fns) => fns.eq(f.id, id))
+      .limit(1)
+      .build(),
+  );
+  const row = rows[0];
+  return row ? to_connection(row) : null;
+}
+
+export async function set_poll_state(
+  rt: DbRuntime,
+  id: string,
+  state: poll_state,
+): Promise<void> {
+  await rt.execute(
+    db.sql.public['ayrock.busy.connection']
+      .update({
+        eventId: state.event_id,
+        nextEventAt:
+          state.next_event_at !== null ? new Date(state.next_event_at) : null,
+      })
+      .where((f, fns) => fns.eq(f.id, id))
       .build(),
   );
 }

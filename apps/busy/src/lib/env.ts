@@ -19,6 +19,10 @@ export function workflow_url(env: Env): string {
   return `${env.API_HOST}/api/workflows/event`;
 }
 
+export function spotify_poll_url(env: Env): string {
+  return `${env.API_HOST}/api/workflows/spotify-poll`;
+}
+
 export function spotify_redirect_uri(env: Env): string {
   return `${env.API_HOST}/api/connections/spotify/callback`;
 }

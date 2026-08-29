@@ -33,6 +33,7 @@ export const busy_event_schema = z.union([
     type: z.literal('spotify'),
     device_id: z.string(),
     priority: z.number(),
+    timeout: z.number(),
     track: z.object({
       name: z.string(),
       artists: z.array(z.string()),

@@ -1,0 +1,86 @@
+[
+  {
+    "id": "column.public.ayrock.busy.connection.eventId",
+    "label": "Add column \"eventId\" to \"ayrock.busy.connection\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "eventId",
+        "table": "ayrock.busy.connection"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"eventId\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "ayrock.busy.connection",
+          "eventId"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"eventId\"",
+        "sql": "ALTER TABLE \"public\".\"ayrock.busy.connection\" ADD COLUMN \"eventId\" text"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"eventId\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "ayrock.busy.connection",
+          "eventId"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "column.public.ayrock.busy.connection.nextEventAt",
+    "label": "Add column \"nextEventAt\" to \"ayrock.busy.connection\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "nextEventAt",
+        "table": "ayrock.busy.connection"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"nextEventAt\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "ayrock.busy.connection",
+          "nextEventAt"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"nextEventAt\"",
+        "sql": "ALTER TABLE \"public\".\"ayrock.busy.connection\" ADD COLUMN \"nextEventAt\" timestamptz"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"nextEventAt\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "ayrock.busy.connection",
+          "nextEventAt"
+        ]
+      }
+    ]
+  }
+]

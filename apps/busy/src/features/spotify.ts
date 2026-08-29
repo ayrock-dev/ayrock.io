@@ -32,7 +32,7 @@ export type profile = {
 };
 
 export type now_playing_result =
-  | { type: 'playing'; track: track }
+  | { type: 'playing'; track: track; progress_ms: number; duration_ms: number }
   | { type: 'nothing' }
   | { type: 'error'; message: string };
 
@@ -50,9 +50,11 @@ const profile_schema = z.object({
 
 const now_playing_schema = z.object({
   is_playing: z.boolean(),
+  progress_ms: z.nullable(z.number()),
   item: z.nullable(
     z.object({
       name: z.string(),
+      duration_ms: z.number(),
       album: z.object({ name: z.string() }),
       artists: z.array(z.object({ name: z.string() })),
     }),
@@ -191,7 +193,7 @@ export async function now_playing(
     };
   }
 
-  const { is_playing, item } = parsed.data;
+  const { is_playing, item, progress_ms } = parsed.data;
   if (!is_playing || !item) return { type: 'nothing' };
 
   return {
@@ -201,5 +203,7 @@ export async function now_playing(
       artists: item.artists.map((a) => a.name),
       album: item.album.name,
     },
+    progress_ms: progress_ms ?? 0,
+    duration_ms: item.duration_ms,
   };
 }

@@ -1,8 +1,11 @@
 import type { DisplayElements } from '@busy-app/busy-lib';
+import type { Client } from '@upstash/qstash';
 import type { connection } from '../features/connections';
 import * as connections from '../features/connections';
+import * as devices from '../features/devices';
 import type { config, track } from '../features/spotify';
 import * as spotify from '../features/spotify';
+import * as workflow from '../features/workflow';
 import {
   BusyEvent,
   type busy_event,
@@ -10,7 +13,9 @@ import {
   type draw_frame,
   type event_props,
 } from '../lib/events';
+import { nanoid } from '../lib/nanoid';
 import type { DbRuntime } from '../lib/prisma';
+import { spotify_poll_queue_name } from '../lib/upstash';
 
 const G = '#1DB954FF';
 const W = '#FFFFFFFF';
@@ -18,10 +23,10 @@ const N = null;
 const to_color = (ch: string) => (ch === 'G' ? G : ch === 'W' ? W : N);
 
 const logo = [
-  '....GGGGGGGG....',
+  '......GGGG......',
+  '...GGGGGGGGGG...',
   '..GGGGGGGGGGGG..',
   '.GGGGGGGGGGGGGG.',
-  'GGGGGGGGGGGGGGGG',
   'GGGWWWWWWWWWWGGG',
   'GGWWGGGGGGGGWWGG',
   'GGGGGGGGGGGGGGGG',
@@ -30,15 +35,16 @@ const logo = [
   'GGGGGGGGGGGGGGGG',
   'GGGGWWWWWWWGGGGG',
   'GGGWWGGGGWWGGGGG',
-  'GGGGGGGGGGGGGGGG',
-  '.GGGGGGGGGGGGGG.',
+  '.GGGGGGGGGGGGGGG',
   '..GGGGGGGGGGGG..',
-  '....GGGGGGGG....',
+  '...GGGGGGGGGG...',
+  '......GGGG......',
 ].map((line) => [...line].map(to_color));
 
-const timeout_s = 55;
-
-function row_run(map: (string | null)[][]): DisplayElements['elements'] {
+function row_run(
+  map: (string | null)[][],
+  timeout_s: number,
+): DisplayElements['elements'] {
   const elements: DisplayElements['elements'] = [];
   let n = 0;
   for (let y = 0; y < map.length; y++) {
@@ -73,25 +79,24 @@ function row_run(map: (string | null)[][]): DisplayElements['elements'] {
   return elements;
 }
 
-function track_key(t: track): string {
-  return `${t.name}\u0000${t.artists.join(',')}`;
-}
-
 export class SpotifyEvent extends BusyEvent {
   private readonly track: track;
+  private readonly timeout_s: number;
 
-  constructor(props: event_props & { track: track }) {
+  constructor(props: event_props & { track: track; timeout: number }) {
     super(props);
     this.track = props.track;
+    this.timeout_s = props.timeout;
   }
 
   render(): draw_frame {
     const text_x = 18;
     const text_width = 72 - text_x;
+    const timeout_s = this.timeout_s;
     return {
       priority: this.priority,
       elements: [
-        ...row_run(logo),
+        ...row_run(logo, timeout_s),
         {
           id: 'track_name',
           type: 'text',
@@ -123,7 +128,10 @@ export class SpotifyEvent extends BusyEvent {
   }
 }
 
-const last_seen = new Map<string, string>();
+const buffer_s = 2;
+const min_delay_s = 5;
+const error_retry_s = 15;
+const grace_ms = 30_000;
 
 async function access_token_for(
   rt: DbRuntime,
@@ -162,34 +170,127 @@ export async function profile(
   return spotify.get_profile(token);
 }
 
-export function to_event(device_id: string, track: track): busy_event {
+export function to_event(
+  device_id: string,
+  track: track,
+  timeout: number,
+): busy_event {
   return {
     type: 'spotify',
     device_id,
     priority: device_priority.neutral,
+    timeout,
     track,
   };
 }
 
-export async function poll(
+export type poll_deps = {
+  qstash: Client;
+  poll_url: string;
+  workflow_url: string;
+  config: config;
+};
+
+function delay_for(remaining_ms: number): number {
+  return Math.max(Math.ceil(remaining_ms / 1000) + buffer_s, min_delay_s);
+}
+
+async function schedule(
   rt: DbRuntime,
-  conn: connection,
-  config: config,
-): Promise<track | null> {
-  if (!conn.spotify_auth) return null;
+  deps: poll_deps,
+  connection_id: string,
+  delay_s: number,
+): Promise<void> {
+  const event_id = nanoid();
+  await connections.set_poll_state(rt, connection_id, {
+    event_id,
+    next_event_at: Date.now() + delay_s * 1000 + grace_ms,
+  });
+  try {
+    await deps.qstash
+      .queue({ queueName: spotify_poll_queue_name })
+      .enqueueJSON({
+        url: deps.poll_url,
+        body: { connection_id, event_id },
+        delay: delay_s,
+        deduplicationId: event_id,
+        retries: 3,
+      });
+  } catch (error) {
+    await connections.set_poll_state(rt, connection_id, {
+      event_id: null,
+      next_event_at: null,
+    });
+    throw error;
+  }
+}
 
-  const token = await access_token_for(rt, conn, config);
-  if (!token) return null;
+async function drop(rt: DbRuntime, connection_id: string): Promise<void> {
+  await connections.set_poll_state(rt, connection_id, {
+    event_id: null,
+    next_event_at: null,
+  });
+}
 
-  const state = await spotify.now_playing(token);
-  if (state.type !== 'playing') {
-    if (state.type === 'nothing') last_seen.delete(conn.id);
-    return null;
+export type poll_outcome =
+  | { status: 'playing' }
+  | { status: 'idle' }
+  | { status: 'superseded' }
+  | { status: 'unknown' }
+  | { status: 'no_token' }
+  | { status: 'error' };
+
+export async function handle_poll(
+  rt: DbRuntime,
+  deps: poll_deps,
+  payload: { connection_id: string; event_id: string },
+): Promise<poll_outcome> {
+  const conn = await connections.get_by_id(rt, payload.connection_id);
+  if (conn?.type !== 'spotify' || !conn.spotify_auth)
+    return { status: 'unknown' };
+  if (conn.event_id !== payload.event_id) return { status: 'superseded' };
+
+  const token = await access_token_for(rt, conn, deps.config);
+  if (!token) {
+    await drop(rt, conn.id);
+    return { status: 'no_token' };
   }
 
-  const key = track_key(state.track);
-  if (last_seen.get(conn.id) === key) return null;
-  last_seen.set(conn.id, key);
+  const state = await spotify.now_playing(token);
+  if (state.type === 'error') {
+    await schedule(rt, deps, conn.id, error_retry_s);
+    return { status: 'error' };
+  }
+  if (state.type === 'nothing') {
+    await drop(rt, conn.id);
+    return { status: 'idle' };
+  }
 
-  return state.track;
+  const remaining_ms = Math.max(state.duration_ms - state.progress_ms, 0);
+  const delay_s = delay_for(remaining_ms);
+
+  for (const device of await devices.all(rt, conn.user_id)) {
+    if (device.busybar_auth === undefined) continue;
+    await workflow.enqueue(
+      deps.qstash,
+      deps.workflow_url,
+      to_event(device.id, state.track, delay_s),
+    );
+  }
+
+  await schedule(rt, deps, conn.id, delay_s);
+  return { status: 'playing' };
+}
+
+export async function ensure_scheduled(
+  rt: DbRuntime,
+  deps: poll_deps,
+  conn: connection,
+): Promise<void> {
+  const alive =
+    conn.event_id !== undefined &&
+    conn.next_event_at !== undefined &&
+    conn.next_event_at > Date.now();
+  if (alive) return;
+  await schedule(rt, deps, conn.id, 0);
 }

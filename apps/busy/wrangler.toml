@@ -8,4 +8,4 @@ pattern = "busy.ayrock.io"
 custom_domain = true
 
 [triggers]
-crons = ["* * * * *"]
+crons = ["*/2 * * * *"]

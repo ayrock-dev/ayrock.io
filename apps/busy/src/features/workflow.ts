@@ -24,6 +24,7 @@ function render(event: busy_event): draw_frame {
         source: 'spotify',
         priority: event.priority,
         track: event.track,
+        timeout: event.timeout,
       }).render();
     case 'debug':
       return new DebugEvent({

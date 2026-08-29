@@ -11,6 +11,7 @@ import * as workflow from './features/workflow';
 import {
   type Env,
   parse_env,
+  spotify_poll_url,
   spotify_redirect_uri,
   workflow_url,
 } from './lib/env';
@@ -46,6 +47,20 @@ const debug_ingest_schema = z.object({
   priority: z.optional(z.number()),
   elements: z.array(draw_element_schema),
 });
+
+const spotify_poll_schema = z.object({
+  connection_id: z.string(),
+  event_id: z.string(),
+});
+
+function poll_deps(env: Env, config: spotify_api.config): spotify.poll_deps {
+  return {
+    qstash: make_qstash(env),
+    poll_url: spotify_poll_url(env),
+    workflow_url: workflow_url(env),
+    config,
+  };
+}
 
 api.get('/healthcheck', (c) => c.text('OK', 200));
 
@@ -159,6 +174,18 @@ api.post('/ingest/debug', async (c) => {
   return c.json({ queued: event.device_id }, 202);
 });
 
+api.post('/workflows/spotify-poll', async (c) => {
+  const parsed = z.safeParse(spotify_poll_schema, await c.req.json());
+  if (!parsed.success) return c.json({ error: parsed.error }, 400);
+  const config = spotify_config(c.env);
+  if (!config) return c.json({ error: 'spotify not configured' }, 500);
+  const env = parse_env(c.env);
+  const outcome = await with_db(env.DATABASE_URL, (rt) =>
+    spotify.handle_poll(rt, poll_deps(env, config), parsed.data),
+  );
+  return c.json(outcome, 200);
+});
+
 api.post('/workflows/event', async (c) => {
   const parsed = z.safeParse(busy_event_schema, await c.req.json());
   if (!parsed.success) return c.json({ error: parsed.error }, 400);
@@ -183,19 +210,11 @@ async function scheduled(_event: ScheduledController, env: Env): Promise<void> {
   const config = spotify_config(env);
   if (!config) return;
   const parsed = parse_env(env);
-  const url = workflow_url(parsed);
-  if (!url) return;
-  const qstash = make_qstash(parsed);
+  const deps = poll_deps(parsed, config);
   await with_db(parsed.DATABASE_URL, async (rt) => {
     for (const conn of await connections.all(rt)) {
       if (conn.type !== 'spotify' || !conn.spotify_auth) continue;
-      const track = await spotify.poll(rt, conn, config);
-      if (!track) continue;
-      const targets = await devices.all(rt, conn.user_id);
-      for (const device of targets) {
-        if (device.busybar_auth === undefined) continue;
-        await workflow.enqueue(qstash, url, spotify.to_event(device.id, track));
-      }
+      await spotify.ensure_scheduled(rt, deps, conn);
     }
   });
 }
