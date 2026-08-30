@@ -1,0 +1,340 @@
+[
+  {
+    "id": "schema.public",
+    "label": "Create schema \"public\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres"
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "Create schema \"public\"",
+        "sql": "CREATE SCHEMA IF NOT EXISTS \"public\"",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "table.ayrock.busy.connection",
+    "label": "Create table \"ayrock.busy.connection\"",
+    "summary": "Creates table \"ayrock.busy.connection\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "ayrock.busy.connection"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"ayrock.busy.connection\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.connection\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"ayrock.busy.connection\"",
+        "sql": "CREATE TABLE \"public\".\"ayrock.busy.connection\" (\n  \"access_token\" text,\n  \"created_at\" timestamptz DEFAULT (now()) NOT NULL,\n  \"event_id\" text,\n  \"expires_at\" timestamptz,\n  \"id\" text NOT NULL,\n  \"next_event_at\" timestamptz,\n  \"refresh_token\" text,\n  \"type\" text NOT NULL,\n  \"updated_at\" timestamptz NOT NULL,\n  \"user_id\" text NOT NULL,\n  PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"ayrock.busy.connection\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.connection\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.ayrock.busy.device",
+    "label": "Create table \"ayrock.busy.device\"",
+    "summary": "Creates table \"ayrock.busy.device\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "ayrock.busy.device"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"ayrock.busy.device\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.device\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"ayrock.busy.device\"",
+        "sql": "CREATE TABLE \"public\".\"ayrock.busy.device\" (\n  \"access_token\" text,\n  \"created_at\" timestamptz DEFAULT (now()) NOT NULL,\n  \"expires_at\" timestamptz,\n  \"id\" text NOT NULL,\n  \"name\" text,\n  \"updated_at\" timestamptz NOT NULL,\n  \"user_id\" text NOT NULL,\n  PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"ayrock.busy.device\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.device\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.ayrock.busy.user",
+    "label": "Create table \"ayrock.busy.user\"",
+    "summary": "Creates table \"ayrock.busy.user\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "ayrock.busy.user"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"ayrock.busy.user\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.user\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"ayrock.busy.user\"",
+        "sql": "CREATE TABLE \"public\".\"ayrock.busy.user\" (\n  \"created_at\" timestamptz DEFAULT (now()) NOT NULL,\n  \"id\" text NOT NULL,\n  \"updated_at\" timestamptz NOT NULL,\n  PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"ayrock.busy.user\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.user\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.ayrock.busy.connection.ayrock.busy.connection_user_id_type_key",
+    "label": "Add unique constraint on \"ayrock.busy.connection\" (user_id, type)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "ayrock.busy.connection_user_id_type_key",
+        "table": "ayrock.busy.connection"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"ayrock.busy.connection_user_id_type_key\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "ayrock.busy.connection_user_id_type_key",
+          "public",
+          "\"public\".\"ayrock.busy.connection\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"ayrock.busy.connection_user_id_type_key\"",
+        "sql": "ALTER TABLE \"public\".\"ayrock.busy.connection\" ADD CONSTRAINT \"ayrock.busy.connection_user_id_type_key\" UNIQUE (\"user_id\", \"type\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"ayrock.busy.connection_user_id_type_key\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "ayrock.busy.connection_user_id_type_key",
+          "public",
+          "\"public\".\"ayrock.busy.connection\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.ayrock.busy.connection.ayrock.busy.connection_user_id_idx_6c952402",
+    "label": "Create index \"ayrock.busy.connection_user_id_idx_6c952402\" on \"ayrock.busy.connection\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "ayrock.busy.connection_user_id_idx_6c952402",
+        "table": "ayrock.busy.connection"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"ayrock.busy.connection_user_id_idx_6c952402\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.connection_user_id_idx_6c952402\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"ayrock.busy.connection_user_id_idx_6c952402\"",
+        "sql": "CREATE INDEX \"ayrock.busy.connection_user_id_idx_6c952402\" ON \"public\".\"ayrock.busy.connection\" (\"user_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"ayrock.busy.connection_user_id_idx_6c952402\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.connection_user_id_idx_6c952402\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.ayrock.busy.device.ayrock.busy.device_user_id_idx_6c952402",
+    "label": "Create index \"ayrock.busy.device_user_id_idx_6c952402\" on \"ayrock.busy.device\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "ayrock.busy.device_user_id_idx_6c952402",
+        "table": "ayrock.busy.device"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"ayrock.busy.device_user_id_idx_6c952402\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.device_user_id_idx_6c952402\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"ayrock.busy.device_user_id_idx_6c952402\"",
+        "sql": "CREATE INDEX \"ayrock.busy.device_user_id_idx_6c952402\" ON \"public\".\"ayrock.busy.device\" (\"user_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"ayrock.busy.device_user_id_idx_6c952402\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"ayrock.busy.device_user_id_idx_6c952402\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.ayrock.busy.connection.ayrock.busy.connection_user_id_fkey",
+    "label": "Add foreign key \"ayrock.busy.connection_user_id_fkey\" on \"ayrock.busy.connection\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "ayrock.busy.connection_user_id_fkey",
+        "table": "ayrock.busy.connection"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"ayrock.busy.connection_user_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "ayrock.busy.connection_user_id_fkey",
+          "public",
+          "\"public\".\"ayrock.busy.connection\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"ayrock.busy.connection_user_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"ayrock.busy.connection\"\nADD CONSTRAINT \"ayrock.busy.connection_user_id_fkey\"\nFOREIGN KEY (\"user_id\")\nREFERENCES \"public\".\"ayrock.busy.user\" (\"id\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"ayrock.busy.connection_user_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "ayrock.busy.connection_user_id_fkey",
+          "public",
+          "\"public\".\"ayrock.busy.connection\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.ayrock.busy.device.ayrock.busy.device_user_id_fkey",
+    "label": "Add foreign key \"ayrock.busy.device_user_id_fkey\" on \"ayrock.busy.device\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "ayrock.busy.device_user_id_fkey",
+        "table": "ayrock.busy.device"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"ayrock.busy.device_user_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "ayrock.busy.device_user_id_fkey",
+          "public",
+          "\"public\".\"ayrock.busy.device\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"ayrock.busy.device_user_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"ayrock.busy.device\"\nADD CONSTRAINT \"ayrock.busy.device_user_id_fkey\"\nFOREIGN KEY (\"user_id\")\nREFERENCES \"public\".\"ayrock.busy.user\" (\"id\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"ayrock.busy.device_user_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "ayrock.busy.device_user_id_fkey",
+          "public",
+          "\"public\".\"ayrock.busy.device\""
+        ]
+      }
+    ]
+  }
+]
