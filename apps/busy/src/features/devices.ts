@@ -88,7 +88,8 @@ export async function update(
   if (!existing) return null;
   const fields: { name?: string | null; access_token?: string | null } = {};
   if (patch.name !== undefined) fields.name = patch.name ?? null;
-  if (patch.busybar_auth !== undefined) fields.access_token = patch.busybar_auth;
+  if (patch.busybar_auth !== undefined)
+    fields.access_token = patch.busybar_auth;
   if (Object.keys(fields).length > 0)
     await rt.execute(
       db.sql.public['ayrock.busy.device']
