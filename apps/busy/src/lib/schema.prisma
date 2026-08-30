@@ -11,31 +11,31 @@ model User {
 }
 
 model Device {
-  id          String    @id
-  created_at  DateTime  @default(now())
-  updated_at  temporal.updatedAt()
-  name        String?
-  accessToken String?
-  expiresAt   DateTime?
-  user        User      @relation(fields: [userId], references: [id])
-  userId      String
+  id           String    @id
+  created_at   DateTime  @default(now())
+  updated_at   temporal.updatedAt()
+  name         String?
+  access_token String?
+  expires_at   DateTime?
+  user         User      @relation(fields: [user_id], references: [id])
+  user_id      String
 
   @@map("ayrock.busy.device")
 }
 
 model Connection {
-  id           String    @id
-  created_at   DateTime  @default(now())
-  updated_at   temporal.updatedAt()
-  type         String
-  accessToken  String?
-  refreshToken String?
-  expiresAt    DateTime?
-  eventId      String?
-  nextEventAt  DateTime?
-  user         User      @relation(fields: [userId], references: [id])
-  userId       String
+  id            String    @id
+  created_at    DateTime  @default(now())
+  updated_at    temporal.updatedAt()
+  type          String
+  access_token  String?
+  refresh_token String?
+  expires_at    DateTime?
+  event_id      String?
+  next_event_at DateTime?
+  user          User      @relation(fields: [user_id], references: [id])
+  user_id       String
 
-  @@unique([userId, type])
+  @@unique([user_id, type])
   @@map("ayrock.busy.connection")
 }

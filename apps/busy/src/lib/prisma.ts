@@ -4,6 +4,7 @@ import contract_json from './schema.json' with { type: 'json' };
 
 export const db = postgres_serverless<Contract>({
   contractJson: contract_json,
+  verifyMarker: false,
 });
 
 export type DbRuntime = Awaited<ReturnType<typeof db.connect>>;

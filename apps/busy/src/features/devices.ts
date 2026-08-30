@@ -17,17 +17,17 @@ export type device_input = {
 type device_row = {
   id: string;
   name: string | null;
-  accessToken: string | null;
-  userId: string;
+  access_token: string | null;
+  user_id: string;
 };
 
 function to_device(row: device_row): device {
   const base: device = {
     id: row.id,
     name: row.name ?? null,
-    user_id: row.userId,
+    user_id: row.user_id,
   };
-  if (row.accessToken !== null) base.busybar_auth = row.accessToken;
+  if (row.access_token !== null) base.busybar_auth = row.access_token;
   return base;
 }
 
@@ -37,8 +37,8 @@ export async function all(
 ): Promise<device[]> {
   const rows = await rt.query(
     db.sql.public['ayrock.busy.device']
-      .select('id', 'name', 'accessToken', 'userId')
-      .where((f, fns) => fns.eq(f.userId, user_id))
+      .select('id', 'name', 'access_token', 'user_id')
+      .where((f, fns) => fns.eq(f.user_id, user_id))
       .build(),
   );
   return rows.map(to_device);
@@ -47,7 +47,7 @@ export async function all(
 export async function get(rt: DbRuntime, id: string): Promise<device | null> {
   const rows = await rt.query(
     db.sql.public['ayrock.busy.device']
-      .select('id', 'name', 'accessToken', 'userId')
+      .select('id', 'name', 'access_token', 'user_id')
       .where((f, fns) => fns.eq(f.id, id))
       .limit(1)
       .build(),
@@ -70,8 +70,8 @@ export async function create(
         {
           id,
           name,
-          userId: user_id,
-          accessToken: input.busybar_auth ?? null,
+          user_id,
+          access_token: input.busybar_auth ?? null,
         },
       ])
       .build(),
@@ -86,9 +86,9 @@ export async function update(
 ): Promise<device | null> {
   const existing = await get(rt, id);
   if (!existing) return null;
-  const fields: { name?: string | null; accessToken?: string | null } = {};
+  const fields: { name?: string | null; access_token?: string | null } = {};
   if (patch.name !== undefined) fields.name = patch.name ?? null;
-  if (patch.busybar_auth !== undefined) fields.accessToken = patch.busybar_auth;
+  if (patch.busybar_auth !== undefined) fields.access_token = patch.busybar_auth;
   if (Object.keys(fields).length > 0)
     await rt.execute(
       db.sql.public['ayrock.busy.device']
