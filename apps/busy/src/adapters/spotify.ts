@@ -139,6 +139,7 @@ async function access_token_for(
   config: config,
 ): Promise<string | null> {
   if (conn.expires_at.getTime() > Date.now() + 10_000) return conn.access_token;
+  if (conn.refresh_token === null) return null;
 
   const result = await spotify.refresh_access_token(config, conn.refresh_token);
   if (result.type === 'error') return null;

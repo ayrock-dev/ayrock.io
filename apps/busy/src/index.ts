@@ -2,14 +2,18 @@ import type { DisplayElements } from '@busy-app/busy-lib';
 import { Hono } from 'hono';
 import * as z from 'zod/mini';
 import * as debug from './adapters/debug';
+import * as litterbot from './adapters/litterbot';
 import * as spotify from './adapters/spotify';
 import * as connections from './features/connections';
 import * as devices from './features/devices';
+import * as litterbot_api from './features/litterbot';
 import * as spotify_api from './features/spotify';
 import { DEFAULT_USER_ID, ensure_default } from './features/users';
 import * as workflow from './features/workflow';
 import {
   type Env,
+  litterbot_poll_url,
+  litterbot_recheck_url,
   parse_env,
   spotify_poll_url,
   spotify_redirect_uri,
@@ -53,12 +57,44 @@ const spotify_poll_schema = z.object({
   event_id: z.string(),
 });
 
+const litterbot_login_schema = z.object({
+  username: z.string(),
+  password: z.string(),
+});
+
+const litterbot_poll_schema = z.object({
+  connection_id: z.string(),
+  event_id: z.string(),
+});
+
+const litterbot_visit_schema = z.object({
+  pet_name: z.nullable(z.string()),
+  pet_weight: z.nullable(z.number()),
+  litter_level_pct: z.nullable(z.number()),
+  waste_level_pct: z.nullable(z.number()),
+  visit_at: z.string(),
+});
+
+const litterbot_recheck_schema = z.object({
+  connection_id: z.string(),
+  visit: litterbot_visit_schema,
+});
+
 function poll_deps(env: Env, config: spotify_api.config): spotify.poll_deps {
   return {
     qstash: make_qstash(env),
     poll_url: spotify_poll_url(env),
     workflow_url: workflow_url(env),
     config,
+  };
+}
+
+function litterbot_deps(env: Env): litterbot.poll_deps {
+  return {
+    qstash: make_qstash(env),
+    poll_url: litterbot_poll_url(env),
+    recheck_url: litterbot_recheck_url(env),
+    workflow_url: workflow_url(env),
   };
 }
 
@@ -89,6 +125,13 @@ api.get('/connections', async (c) => {
             type: 'spotify' as const,
             display_name: p?.display_name ?? null,
             image_url: p?.image_url ?? null,
+          };
+        }
+        if (conn.type === 'litterbot') {
+          return {
+            id: conn.id,
+            type: 'litterbot' as const,
+            linked: conn.refresh_token !== null,
           };
         }
         return { id: conn.id, type: conn.type };
@@ -163,6 +206,47 @@ api.get('/connections/spotify/callback', async (c) => {
   return c.redirect('/');
 });
 
+api.post('/connections/litterbot', async (c) => {
+  const parsed = z.safeParse(litterbot_login_schema, await c.req.json());
+  if (!parsed.success) return c.json({ error: parsed.error }, 400);
+  const result = await litterbot_api.login(
+    parsed.data.username,
+    parsed.data.password,
+  );
+  if (result.type === 'error') return c.json({ error: result.message }, 502);
+  const env = parse_env(c.env);
+  const user_id = await with_db(env.DATABASE_URL, (rt) => ensure_default(rt));
+  const updated = await with_db(env.DATABASE_URL, (rt) =>
+    connections.set_litterbot_auth(rt, user_id, {
+      access_token: result.token.access_token,
+      refresh_token: result.token.refresh_token,
+      expires_at: new Date(Date.now() + result.token.expires_in * 1000),
+    }),
+  );
+  if (!updated) return c.json({ error: 'could not link litter robot' }, 502);
+  return c.json({ linked: true }, 201);
+});
+
+api.post('/workflows/litterbot-poll', async (c) => {
+  const parsed = z.safeParse(litterbot_poll_schema, await c.req.json());
+  if (!parsed.success) return c.json({ error: parsed.error }, 400);
+  const env = parse_env(c.env);
+  const outcome = await with_db(env.DATABASE_URL, (rt) =>
+    litterbot.handle_poll(rt, litterbot_deps(env), parsed.data),
+  );
+  return c.json(outcome, 200);
+});
+
+api.post('/workflows/litterbot-recheck', async (c) => {
+  const parsed = z.safeParse(litterbot_recheck_schema, await c.req.json());
+  if (!parsed.success) return c.json({ error: parsed.error }, 400);
+  const env = parse_env(c.env);
+  const outcome = await with_db(env.DATABASE_URL, (rt) =>
+    litterbot.handle_recheck(rt, litterbot_deps(env), parsed.data),
+  );
+  return c.json(outcome, 200);
+});
+
 api.post('/ingest/debug', async (c) => {
   const parsed = z.safeParse(debug_ingest_schema, await c.req.json());
   if (!parsed.success) return c.json({ error: parsed.error }, 400);
@@ -207,14 +291,16 @@ api.post('/workflows/event', async (c) => {
  *
  **/
 async function scheduled(_event: ScheduledController, env: Env): Promise<void> {
-  const config = spotify_config(env);
-  if (!config) return;
   const parsed = parse_env(env);
-  const deps = poll_deps(parsed, config);
+  const config = spotify_config(env);
+  const spotify_deps = config ? poll_deps(parsed, config) : null;
+  const lb_deps = litterbot_deps(parsed);
   await with_db(parsed.DATABASE_URL, async (rt) => {
     for (const conn of await connections.all(rt)) {
-      if (conn.type !== 'spotify') continue;
-      await spotify.ensure_scheduled(rt, deps, conn);
+      if (conn.type === 'spotify' && spotify_deps)
+        await spotify.ensure_scheduled(rt, spotify_deps, conn);
+      else if (conn.type === 'litterbot')
+        await litterbot.ensure_scheduled(rt, lb_deps, conn);
     }
   });
 }

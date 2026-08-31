@@ -1,5 +1,6 @@
 import type { Client } from '@upstash/qstash';
 import { DebugEvent } from '../adapters/debug';
+import { LitterbotEvent } from '../adapters/litterbot';
 import { SpotifyEvent } from '../adapters/spotify';
 import type { busy_event, draw_frame } from '../lib/events';
 import type { DbRuntime } from '../lib/prisma';
@@ -25,6 +26,20 @@ function render(event: busy_event): draw_frame {
         priority: event.priority,
         track: event.track,
         timeout: event.timeout,
+      }).render();
+    case 'litterbot':
+      return new LitterbotEvent({
+        device_id: event.device_id,
+        source: 'litterbot',
+        priority: event.priority,
+        timeout: event.timeout,
+        visit: {
+          pet_name: event.pet_name,
+          pet_weight: event.pet_weight,
+          litter_level_pct: event.litter_level_pct,
+          waste_level_pct: event.waste_level_pct,
+          visit_at: '',
+        },
       }).render();
     case 'debug':
       return new DebugEvent({

@@ -8,7 +8,7 @@ const api = (path, init) =>
   });
 
 const el = (id) => document.getElementById(id);
-const friendly_name = { busybar: 'Busy Bar', spotify: 'Spotify' };
+const friendly_name = { busybar: 'Busy Bar', spotify: 'Spotify', litterbot: 'Litter Robot' };
 
 function badge(label, on) {
   const cls = on
@@ -67,6 +67,11 @@ function render_connections(conns) {
           '<span class="text-sm text-slate-600">' +
           (conn.display_name ?? 'Linked') +
           '</span></div>';
+      } else if (conn.type === 'litterbot') {
+        right =
+          '<span class="text-sm text-slate-600">' +
+          (conn.linked ? 'Linked' : 'Not linked') +
+          '</span>';
       }
       return (
         '<div class="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">' +
@@ -107,9 +112,31 @@ function link_spotify() {
   window.location.href = '/api/connections/spotify/authorize';
 }
 
+async function link_litterbot(e) {
+  e.preventDefault();
+  const username = el('litterbot-username').value.trim();
+  const password = el('litterbot-password').value;
+  const status = el('litterbot-status');
+  if (!username || !password) return;
+  status.textContent = 'Linking...';
+  const res = await api('/connections/litterbot', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  });
+  if (res.ok) {
+    el('litterbot-username').value = '';
+    el('litterbot-password').value = '';
+    status.textContent = '';
+    await load();
+  } else {
+    status.textContent = 'Could not link. Check credentials.';
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   el('add-device-form').addEventListener('submit', add_device);
   el('link-spotify').addEventListener('click', link_spotify);
+  el('link-litterbot-form').addEventListener('submit', link_litterbot);
   load();
 });
 `;
@@ -166,11 +193,41 @@ function Layout() {
           <section>
             <h2 class="mb-3 font-medium text-lg">Connections</h2>
             <div id="conn-list" class="mb-4 grid gap-3" />
-            <div class={card}>
-              <span class={label}>Add connection</span>
-              <button id="link-spotify" class={`mt-2 ${button}`} type="button">
-                Link Spotify
-              </button>
+            <div class={`${card} grid gap-4`}>
+              <div>
+                <span class={label}>Add connection</span>
+                <button
+                  id="link-spotify"
+                  class={`mt-2 ${button}`}
+                  type="button"
+                >
+                  Link Spotify
+                </button>
+              </div>
+              <form
+                id="link-litterbot-form"
+                class="grid gap-2 border-slate-200 border-t pt-4"
+              >
+                <span class={label}>Link Litter Robot</span>
+                <input
+                  id="litterbot-username"
+                  class={input}
+                  type="email"
+                  autocomplete="username"
+                  placeholder="Whisker email"
+                />
+                <input
+                  id="litterbot-password"
+                  class={input}
+                  type="password"
+                  autocomplete="current-password"
+                  placeholder="Whisker password"
+                />
+                <button class={button} type="submit">
+                  Link
+                </button>
+                <span id="litterbot-status" class="text-slate-500 text-xs" />
+              </form>
             </div>
           </section>
         </div>

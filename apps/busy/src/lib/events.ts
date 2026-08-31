@@ -41,6 +41,16 @@ export const busy_event_schema = z.union([
     }),
   }),
   z.object({
+    type: z.literal('litterbot'),
+    device_id: z.string(),
+    priority: z.number(),
+    timeout: z.number(),
+    pet_name: z.nullable(z.string()),
+    pet_weight: z.nullable(z.number()),
+    litter_level_pct: z.nullable(z.number()),
+    waste_level_pct: z.nullable(z.number()),
+  }),
+  z.object({
     type: z.literal('debug'),
     device_id: z.string(),
     priority: z.number(),
