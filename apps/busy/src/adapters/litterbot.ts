@@ -1,4 +1,3 @@
-import type { DisplayElements } from '@busy-app/busy-lib';
 import type { Client } from '@upstash/qstash';
 import type { connection } from '../features/connections';
 import * as connections from '../features/connections';
@@ -12,69 +11,9 @@ import {
   type draw_frame,
   type event_props,
 } from '../lib/events';
+import { cat_icon, render_icon } from '../lib/icons';
 import { nanoid } from '../lib/nanoid';
 import type { DbRuntime } from '../lib/prisma';
-
-const B = '#00A3E0FF';
-const W = '#FFFFFFFF';
-const to_color = (ch: string) => (ch === 'B' ? B : ch === 'W' ? W : null);
-
-const paw = [
-  '...............',
-  '.BB..BB.BB..BB.',
-  '.BB..BB.BB..BB.',
-  '...............',
-  '.....BBBBB.....',
-  '....BBBBBBB....',
-  '...BBBBBBBBB...',
-  '..BBBBBBBBBBB..',
-  '..BBBBBBBBBBB..',
-  '..BBBBBBBBBBB..',
-  '...BBBBBBBBB...',
-  '....BBBBBBB....',
-  '.....BBBBB.....',
-  '...............',
-  '...............',
-  '...............',
-].map((line) => [...line].map(to_color));
-
-function row_run(
-  map: (string | null)[][],
-  timeout_s: number,
-): DisplayElements['elements'] {
-  const elements: DisplayElements['elements'] = [];
-  let n = 0;
-  for (let y = 0; y < map.length; y++) {
-    const row = map[y];
-    if (!row) continue;
-    let x = 0;
-    while (x < row.length) {
-      const color = row[x];
-      if (color === null || color === undefined) {
-        x++;
-        continue;
-      }
-      let run = 1;
-      while (x + run < row.length && row[x + run] === color) run++;
-      elements.push({
-        id: `paw_${n++}`,
-        type: 'rectangle',
-        x,
-        y,
-        display: 'front',
-        width: run,
-        height: 1,
-        fill: 'solid',
-        fill_colors: [color],
-        border_width: 0,
-        border_color: '#00000000',
-        timeout: timeout_s,
-      });
-      x += run;
-    }
-  }
-  return elements;
-}
 
 export type visit = {
   pet_name: string | null;
@@ -85,7 +24,7 @@ export type visit = {
 };
 
 function subtitle(v: visit): string {
-  if (v.pet_weight !== null) return `${v.pet_weight.toFixed(1)} lb`;
+  if (v.pet_weight !== null) return `${v.pet_weight.toFixed(2)} lbs`;
   if (v.litter_level_pct !== null)
     return `Litter ${Math.round(v.litter_level_pct)}%`;
   return 'Used';
@@ -109,7 +48,12 @@ export class LitterbotEvent extends BusyEvent {
     return {
       priority: this.priority,
       elements: [
-        ...row_run(paw, timeout_s),
+        ...render_icon(cat_icon(this.visit.pet_name), {
+          x: 0,
+          y: 0,
+          timeout: timeout_s,
+          id_prefix: 'cat',
+        }),
         {
           id: 'lb_title',
           type: 'text',
@@ -118,7 +62,7 @@ export class LitterbotEvent extends BusyEvent {
           y: 1,
           display: 'front',
           font: 'small',
-          color: W,
+          color: '#FFFFFFFF',
           width: text_width,
           scroll_rate: 600,
           timeout: timeout_s,

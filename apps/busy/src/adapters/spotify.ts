@@ -1,4 +1,3 @@
-import type { DisplayElements } from '@busy-app/busy-lib';
 import type { Client } from '@upstash/qstash';
 import type { connection } from '../features/connections';
 import * as connections from '../features/connections';
@@ -14,70 +13,9 @@ import {
   type draw_frame,
   type event_props,
 } from '../lib/events';
+import { render_icon, spotify as spotify_icon } from '../lib/icons';
 import { nanoid } from '../lib/nanoid';
 import type { DbRuntime } from '../lib/prisma';
-
-const G = '#1DB954FF';
-const W = '#FFFFFFFF';
-const N = null;
-const to_color = (ch: string) => (ch === 'G' ? G : ch === 'W' ? W : N);
-
-const logo = [
-  '......GGGG......',
-  '...GGGGGGGGGG...',
-  '..GGGGGGGGGGGG..',
-  '.GGGGGGGGGGGGGG.',
-  'GGGWWWWWWWWWWGGG',
-  'GGWWGGGGGGGGWWGG',
-  'GGGGGGGGGGGGGGGG',
-  'GGGWWWWWWWWWGGGG',
-  'GGWWGGGGGGGWWGGG',
-  'GGGGGGGGGGGGGGGG',
-  'GGGGWWWWWWWGGGGG',
-  'GGGWWGGGGWWGGGGG',
-  '.GGGGGGGGGGGGGGG',
-  '..GGGGGGGGGGGG..',
-  '...GGGGGGGGGG...',
-  '......GGGG......',
-].map((line) => [...line].map(to_color));
-
-function row_run(
-  map: (string | null)[][],
-  timeout_s: number,
-): DisplayElements['elements'] {
-  const elements: DisplayElements['elements'] = [];
-  let n = 0;
-  for (let y = 0; y < map.length; y++) {
-    const row = map[y];
-    if (!row) continue;
-    let x = 0;
-    while (x < row.length) {
-      const color = row[x];
-      if (color === null || color === undefined) {
-        x++;
-        continue;
-      }
-      let run = 1;
-      while (x + run < row.length && row[x + run] === color) run++;
-      elements.push({
-        id: `logo_${n++}`,
-        type: 'rectangle',
-        x,
-        y,
-        display: 'front',
-        width: run,
-        height: 1,
-        fill: 'solid',
-        fill_colors: [color],
-        border_width: 0,
-        border_color: '#00000000',
-        timeout: timeout_s,
-      });
-      x += run;
-    }
-  }
-  return elements;
-}
 
 export class SpotifyEvent extends BusyEvent {
   private readonly track: track;
@@ -96,7 +34,12 @@ export class SpotifyEvent extends BusyEvent {
     return {
       priority: this.priority,
       elements: [
-        ...row_run(logo, timeout_s),
+        ...render_icon(spotify_icon, {
+          x: 0,
+          y: 0,
+          timeout: timeout_s,
+          id_prefix: 'logo',
+        }),
         {
           id: 'track_name',
           type: 'text',
@@ -105,7 +48,7 @@ export class SpotifyEvent extends BusyEvent {
           y: 1,
           display: 'front',
           font: 'small',
-          color: W,
+          color: '#FFFFFFFF',
           width: text_width,
           scroll_rate: 600,
           timeout: timeout_s,
