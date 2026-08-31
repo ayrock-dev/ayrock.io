@@ -11,7 +11,7 @@ import {
   type draw_frame,
   type event_props,
 } from '../lib/events';
-import { cat_icon, render_icon } from '../lib/icons';
+import { cat_path } from '../lib/icons';
 import { nanoid } from '../lib/nanoid';
 import type { DbRuntime } from '../lib/prisma';
 
@@ -48,12 +48,16 @@ export class LitterbotEvent extends BusyEvent {
     return {
       priority: this.priority,
       elements: [
-        ...render_icon(cat_icon(this.visit.pet_name), {
+        {
+          id: 'cat',
+          type: 'image',
+          path: cat_path(this.visit.pet_name),
           x: 0,
           y: 0,
+          display: 'front',
+          opacity: 100,
           timeout: timeout_s,
-          id_prefix: 'cat',
-        }),
+        },
         {
           id: 'lb_title',
           type: 'text',

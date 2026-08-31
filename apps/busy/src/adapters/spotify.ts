@@ -13,7 +13,7 @@ import {
   type draw_frame,
   type event_props,
 } from '../lib/events';
-import { render_icon, spotify as spotify_icon } from '../lib/icons';
+import { spotify_path } from '../lib/icons';
 import { nanoid } from '../lib/nanoid';
 import type { DbRuntime } from '../lib/prisma';
 
@@ -34,12 +34,16 @@ export class SpotifyEvent extends BusyEvent {
     return {
       priority: this.priority,
       elements: [
-        ...render_icon(spotify_icon, {
+        {
+          id: 'logo',
+          type: 'image',
+          path: spotify_path,
           x: 0,
           y: 0,
+          display: 'front',
+          opacity: 100,
           timeout: timeout_s,
-          id_prefix: 'logo',
-        }),
+        },
         {
           id: 'track_name',
           type: 'text',

@@ -38,9 +38,17 @@ function render_devices(devices) {
         '<span class="font-medium text-slate-900">' +
         (d.name ?? '(unnamed)') +
         '</span>' +
+        '<div class="flex items-center gap-2">' +
         '<code class="text-xs text-slate-400">' +
         d.id +
-        '</code></div>' +
+        '</code>' +
+        (d.busybar
+          ? '<button data-refresh="' +
+            d.id +
+            '" title="Re-upload assets to device" ' +
+            'class="cursor-pointer rounded px-1.5 py-0.5 text-sm text-slate-500 hover:bg-slate-100">↻</button>'
+          : '') +
+        '</div></div>' +
         '<div class="mt-2">' +
         badge('Busy Bar', d.busybar) +
         '</div></div>',
@@ -91,6 +99,18 @@ async function load() {
   if (cres.ok) render_connections(await cres.json());
 }
 
+async function refresh_device(id, button) {
+  const prev = button.textContent;
+  button.disabled = true;
+  button.textContent = '…';
+  const res = await api('/devices/' + id + '/refresh', { method: 'POST' });
+  button.textContent = res.ok ? '✓' : '✕';
+  setTimeout(() => {
+    button.textContent = prev;
+    button.disabled = false;
+  }, 1500);
+}
+
 async function add_device(e) {
   e.preventDefault();
   const name = el('device-name').value.trim();
@@ -134,6 +154,10 @@ async function link_litterbot(e) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  el('device-list').addEventListener('click', (e) => {
+    const button = e.target.closest('[data-refresh]');
+    if (button) refresh_device(button.getAttribute('data-refresh'), button);
+  });
   el('add-device-form').addEventListener('submit', add_device);
   el('link-spotify').addEventListener('click', link_spotify);
   el('link-litterbot-form').addEventListener('submit', link_litterbot);

@@ -4,6 +4,7 @@ import * as z from 'zod/mini';
 import * as debug from './adapters/debug';
 import * as litterbot from './adapters/litterbot';
 import * as spotify from './adapters/spotify';
+import * as busybar from './features/busybar';
 import * as connections from './features/connections';
 import * as devices from './features/devices';
 import * as litterbot_api from './features/litterbot';
@@ -133,7 +134,28 @@ api.post('/devices', async (c) => {
   const device = await with_db(env.DATABASE_URL, (rt) =>
     devices.create(rt, parsed.data),
   );
+  if (device.access_token !== null)
+    c.executionCtx.waitUntil(busybar.sync_assets(device.access_token));
   return c.json(devices.redact(device), 201);
+});
+
+api.post('/devices/:id/refresh', async (c) => {
+  const env = parse_env(c.env);
+  const device = await with_db(env.DATABASE_URL, (rt) =>
+    devices.get(rt, c.req.param('id')),
+  );
+  if (!device) return c.json({ error: 'device not found' }, 404);
+  if (device.access_token === null)
+    return c.json({ error: 'device has no busy bar token' }, 422);
+  try {
+    await busybar.sync_assets(device.access_token);
+  } catch (error) {
+    return c.json(
+      { error: `asset upload to busy bar failed: ${String(error)}` },
+      502,
+    );
+  }
+  return c.json({ refreshed: true }, 200);
 });
 
 api.post('/devices/:id', async (c) => {
@@ -144,6 +166,8 @@ api.post('/devices/:id', async (c) => {
     devices.update(rt, c.req.param('id'), parsed.data),
   );
   if (!device) return c.json({ error: 'device not found' }, 404);
+  if (parsed.data.access_token !== undefined && device.access_token !== null)
+    c.executionCtx.waitUntil(busybar.sync_assets(device.access_token));
   return c.json(devices.redact(device));
 });
 
