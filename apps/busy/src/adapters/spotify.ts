@@ -193,12 +193,18 @@ async function schedule(
   deps: poll_deps,
   connection_id: string,
   delay_s: number,
+  armed_uri: string | null,
 ): Promise<void> {
   const event_id = nanoid();
-  await connections.set_poll_state(rt, connection_id, {
-    event_id,
-    next_event_at: new Date(Date.now() + delay_s * 1000 + grace_ms),
-  });
+  await connections.set_poll_state(
+    rt,
+    connection_id,
+    {
+      event_id,
+      next_event_at: new Date(Date.now() + delay_s * 1000 + grace_ms),
+    },
+    { value: armed_uri },
+  );
   try {
     await deps.qstash.publishJSON({
       url: deps.poll_url,
@@ -208,19 +214,23 @@ async function schedule(
       retries: 3,
     });
   } catch (error) {
-    await connections.set_poll_state(rt, connection_id, {
-      event_id: null,
-      next_event_at: null,
-    });
+    await connections.set_poll_state(
+      rt,
+      connection_id,
+      { event_id: null, next_event_at: null },
+      { value: null },
+    );
     throw error;
   }
 }
 
 async function drop(rt: DbRuntime, connection_id: string): Promise<void> {
-  await connections.set_poll_state(rt, connection_id, {
-    event_id: null,
-    next_event_at: null,
-  });
+  await connections.set_poll_state(
+    rt,
+    connection_id,
+    { event_id: null, next_event_at: null },
+    { value: null },
+  );
 }
 
 type playing = Extract<spotify.now_playing_result, { type: 'playing' }>;
@@ -243,7 +253,7 @@ async function draw_and_arm(
     );
   }
 
-  await schedule(rt, deps, conn.id, delay_s);
+  await schedule(rt, deps, conn.id, delay_s, state.uri);
 }
 
 export type poll_outcome =
@@ -271,7 +281,7 @@ export async function handle_poll(
 
   const state = await spotify.now_playing(token);
   if (state.type === 'error') {
-    await schedule(rt, deps, conn.id, error_retry_s);
+    await schedule(rt, deps, conn.id, error_retry_s, conn.cursor);
     return { status: 'error' };
   }
   if (state.type === 'nothing') {
@@ -292,13 +302,19 @@ export async function ensure_scheduled(
     conn.event_id !== null &&
     conn.next_event_at !== null &&
     conn.next_event_at.getTime() > Date.now();
-  if (alive) return;
 
   const token = await access_token_for(rt, conn, deps.config);
   if (!token) return;
 
   const state = await spotify.now_playing(token);
-  if (state.type !== 'playing') return;
+  if (state.type === 'error') return;
+
+  if (state.type === 'nothing') {
+    if (alive) await drop(rt, conn.id);
+    return;
+  }
+
+  if (alive && state.uri === conn.cursor) return;
 
   await draw_and_arm(rt, deps, conn, state);
 }

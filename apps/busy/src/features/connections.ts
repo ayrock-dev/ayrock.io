@@ -64,10 +64,19 @@ export async function set_poll_state(
   rt: DbRuntime,
   id: string,
   state: poll_state,
+  cursor?: { value: string | null },
 ): Promise<void> {
+  const fields =
+    cursor === undefined
+      ? { event_id: state.event_id, next_event_at: state.next_event_at }
+      : {
+          event_id: state.event_id,
+          next_event_at: state.next_event_at,
+          cursor: cursor.value,
+        };
   await rt.execute(
     db.sql.public['ayrock.busy.connection']
-      .update({ event_id: state.event_id, next_event_at: state.next_event_at })
+      .update(fields)
       .where((f, fns) => fns.eq(f.id, id))
       .build(),
   );

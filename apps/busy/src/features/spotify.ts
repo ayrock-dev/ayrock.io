@@ -32,7 +32,13 @@ export type profile = {
 };
 
 export type now_playing_result =
-  | { type: 'playing'; track: track; progress_ms: number; duration_ms: number }
+  | {
+      type: 'playing';
+      uri: string;
+      track: track;
+      progress_ms: number;
+      duration_ms: number;
+    }
   | { type: 'nothing' }
   | { type: 'error'; message: string };
 
@@ -53,6 +59,7 @@ const now_playing_schema = z.object({
   progress_ms: z.nullable(z.number()),
   item: z.nullable(
     z.object({
+      uri: z.string(),
       name: z.string(),
       duration_ms: z.number(),
       album: z.object({ name: z.string() }),
@@ -198,6 +205,7 @@ export async function now_playing(
 
   return {
     type: 'playing',
+    uri: item.uri,
     track: {
       name: item.name,
       artists: item.artists.map((a) => a.name),
