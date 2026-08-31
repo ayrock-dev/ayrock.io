@@ -25,8 +25,16 @@ export async function sync_assets(token: string): Promise<void> {
   }
 }
 
+/*
+ * Draw a frame, replacing whatever this app previously drew. The device merges
+ * elements by id within an application_name, so events with different element
+ * ids (e.g. spotify vs litterbot) would otherwise stack on screen. Clearing the
+ * app's canvas first makes each draw a wholesale replace.
+ */
 export async function draw(token: string, frame: draw_frame): Promise<void> {
-  await client(token).DisplayDraw({
+  const bar = client(token);
+  await bar.DisplayClear({ application_name });
+  await bar.DisplayDraw({
     application_name,
     priority: frame.priority,
     elements: frame.elements,
