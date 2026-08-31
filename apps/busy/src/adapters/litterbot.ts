@@ -143,12 +143,7 @@ export class LitterbotEvent extends BusyEvent {
 
 const timeout_s = 30;
 const poll_grace_s = 90;
-const recheck_delay_s = 90;
-const used_values = new Set([
-  'robotStatusCatDetect',
-  'robotCycleStateCatDetect',
-  'catWeight',
-]);
+const used_types = new Set(['PET_VISIT']);
 
 export function to_event(device_id: string, v: visit): busy_event {
   return {
@@ -166,7 +161,6 @@ export function to_event(device_id: string, v: visit): busy_event {
 export type poll_deps = {
   qstash: Client;
   poll_url: string;
-  recheck_url: string;
   workflow_url: string;
 };
 
@@ -239,20 +233,6 @@ async function publish(
   }
 }
 
-async function enqueue_recheck(
-  deps: poll_deps,
-  connection_id: string,
-  v: visit,
-): Promise<void> {
-  await deps.qstash.publishJSON({
-    url: deps.recheck_url,
-    body: { connection_id, visit: v },
-    delay: recheck_delay_s,
-    deduplicationId: `${connection_id}:${v.visit_at}`,
-    retries: 3,
-  });
-}
-
 export type poll_outcome =
   | { status: 'primed' }
   | { status: 'visited' }
@@ -262,7 +242,7 @@ export type poll_outcome =
   | { status: 'no_token' }
   | { status: 'error' };
 
-type detected = { v: visit } | null;
+type detected = { v: visit; pet_id: string | null } | null;
 
 async function scan(
   access_token: string,
@@ -272,7 +252,7 @@ async function scan(
   { newest: string | null; detected: detected } | litterbot.fetch_error
 > {
   let newest = cursor;
-  let best: { at: number; v: visit } | null = null;
+  let best: { at: number; v: visit; pet_id: string | null } | null = null;
 
   for (const robot of robots) {
     const activities = await litterbot.get_activity(access_token, robot.serial);
@@ -283,17 +263,14 @@ async function scan(
       if (Number.isNaN(at)) continue;
       if (newest === null || at > Date.parse(newest)) newest = a.timestamp;
       if (cursor === null || at <= Date.parse(cursor)) continue;
-      if (!used_values.has(a.value)) continue;
+      if (!used_types.has(a.type)) continue;
       if (best !== null && at <= best.at) continue;
-      const weight =
-        a.value === 'catWeight' && a.action_value !== null
-          ? Number.parseFloat(a.action_value)
-          : robot.pet_weight;
       best = {
         at,
+        pet_id: a.pet_id,
         v: {
           pet_name: null,
-          pet_weight: weight !== null && !Number.isNaN(weight) ? weight : null,
+          pet_weight: a.pet_weight,
           litter_level_pct: robot.litter_level_pct,
           waste_level_pct: robot.waste_level_pct,
           visit_at: a.timestamp,
@@ -302,7 +279,10 @@ async function scan(
     }
   }
 
-  return { newest, detected: best ? { v: best.v } : null };
+  return {
+    newest,
+    detected: best ? { v: best.v, pet_id: best.pet_id } : null,
+  };
 }
 
 export async function handle_poll(
@@ -320,13 +300,7 @@ export async function handle_poll(
     return { status: 'no_token' };
   }
 
-  const user_id = await litterbot.get_user_id(token);
-  if (typeof user_id !== 'string') {
-    await drop(rt, conn.id);
-    return { status: 'error' };
-  }
-
-  const robots = await litterbot.get_robots(token, user_id);
+  const robots = await litterbot.get_robots(token);
   if (!Array.isArray(robots)) {
     await drop(rt, conn.id);
     return { status: 'error' };
@@ -344,42 +318,18 @@ export async function handle_poll(
   if (conn.cursor === null) return { status: 'primed' };
   if (result.detected === null) return { status: 'idle' };
 
-  const pets = await litterbot.get_pets(token, user_id);
-  const v = result.detected.v;
-  const attributed: visit = {
-    ...v,
-    pet_name: Array.isArray(pets)
-      ? litterbot.attribute(pets, v.visit_at)
-      : null,
-  };
-
-  if (attributed.pet_name !== null) await publish(rt, deps, conn, attributed);
-  else await enqueue_recheck(deps, conn.id, v);
-
-  return { status: 'visited' };
-}
-
-export async function handle_recheck(
-  rt: DbRuntime,
-  deps: poll_deps,
-  payload: { connection_id: string; visit: visit },
-): Promise<{ status: 'published' | 'unknown' }> {
-  const conn = await connections.get_by_id(rt, payload.connection_id);
-  if (conn?.type !== 'litterbot') return { status: 'unknown' };
-
-  let v = payload.visit;
-  const token = await token_for(rt, conn);
-  if (token) {
+  const { v, pet_id } = result.detected;
+  let pet_name: string | null = null;
+  if (pet_id !== null) {
     const user_id = await litterbot.get_user_id(token);
     if (typeof user_id === 'string') {
       const pets = await litterbot.get_pets(token, user_id);
-      if (Array.isArray(pets))
-        v = { ...v, pet_name: litterbot.attribute(pets, v.visit_at) };
+      if (Array.isArray(pets)) pet_name = litterbot.attribute(pets, pet_id);
     }
   }
 
-  await publish(rt, deps, conn, v);
-  return { status: 'published' };
+  await publish(rt, deps, conn, { ...v, pet_name });
+  return { status: 'visited' };
 }
 
 export async function ensure_scheduled(

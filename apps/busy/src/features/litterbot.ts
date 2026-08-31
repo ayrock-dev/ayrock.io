@@ -5,40 +5,23 @@ import * as z from 'zod/mini';
  * reverse-engineered from community prior art (pylitterbot) and may change or
  * break at any time. We authenticate with username/password via AWS Cognito's
  * USER_PASSWORD_AUTH flow — a plain HTTPS POST, deliberately avoiding SRP so this
- * adapter carries no bespoke auth crypto. The id token is the bearer for the
- * AppSync GraphQL APIs; the whisker user id is the token's `mid` claim.
+ * adapter carries no bespoke auth crypto. The id token is the bearer for both
+ * the EVO REST API and the pet-profile AppSync API; the whisker user id is the
+ * token's `mid` claim.
+ *
+ * This adapter targets the Litter-Robot EVO (type `LRE`), served by the
+ * `ub.prod.iothings.site` REST API (pylitterbot's LitterRobot5 class). The
+ * older LR4 GraphQL API is intentionally not supported.
  */
 const LITTER_ROBOT_CLIENT_ID = '4552ujeu3aic90nf8qn53levmn';
 const COGNITO_ENDPOINT = 'https://cognito-idp.us-east-1.amazonaws.com/';
-const LR4_GRAPHQL = 'https://lr4.iothings.site/graphql';
+const EVO_ENDPOINT = 'https://ub.prod.iothings.site';
 const PET_GRAPHQL = 'https://pet-profile.iothings.site/graphql/';
-
-const ROBOT_STATUS_FIELDS = `
-  serial
-  name
-  isOnline
-  catWeight
-  litterLevelPercentage
-  DFILevelPercent
-`;
-
-const GET_ROBOTS_QUERY = `query GetLR4ByUser($userId: String!) {
-  getLitterRobot4ByUser(userId: $userId) {${ROBOT_STATUS_FIELDS}}
-}`;
-
-const GET_ACTIVITY_QUERY = `query GetLR4Activity($serial: String!, $limit: Int, $consumer: String) {
-  getLitterRobot4Activity(serial: $serial, limit: $limit, consumer: $consumer) {
-    timestamp
-    value
-    actionValue
-  }
-}`;
 
 const GET_PETS_QUERY = `query GetPetsByUser($userId: String!) {
   getPetsByUser(userId: $userId) {
     petId
     name
-    weightHistory { weight timestamp }
   }
 }`;
 
@@ -56,22 +39,20 @@ export type robot = {
   serial: string;
   name: string | null;
   is_online: boolean;
-  pet_weight: number | null;
   litter_level_pct: number | null;
   waste_level_pct: number | null;
 };
 
 export type activity = {
   timestamp: string;
-  value: string;
-  action_value: string | null;
+  type: string;
+  pet_id: string | null;
+  pet_weight: number | null;
 };
 
-export type weight_reading = { weight: number; timestamp: string };
 export type pet = {
   id: string;
   name: string | null;
-  weights: weight_reading[];
 };
 
 export type fetch_error = { type: 'error'; message: string };
@@ -85,36 +66,28 @@ const auth_result_schema = z.object({
   }),
 });
 
-const robots_schema = z.object({
-  data: z.object({
-    getLitterRobot4ByUser: z.nullable(
-      z.array(
-        z.object({
-          serial: z.string(),
-          name: z.nullable(z.optional(z.string())),
-          isOnline: z.optional(z.boolean()),
-          catWeight: z.nullable(z.optional(z.number())),
-          litterLevelPercentage: z.nullable(z.optional(z.number())),
-          DFILevelPercent: z.nullable(z.optional(z.number())),
-        }),
-      ),
+const robots_schema = z.array(
+  z.object({
+    serial: z.string(),
+    name: z.nullable(z.optional(z.string())),
+    state: z.optional(
+      z.object({
+        isOnline: z.optional(z.boolean()),
+        litterLevelPercent: z.nullable(z.optional(z.number())),
+        dfiLevelPercent: z.nullable(z.optional(z.number())),
+      }),
     ),
   }),
-});
+);
 
-const activity_schema = z.object({
-  data: z.object({
-    getLitterRobot4Activity: z.nullable(
-      z.array(
-        z.object({
-          timestamp: z.string(),
-          value: z.string(),
-          actionValue: z.nullable(z.optional(z.string())),
-        }),
-      ),
-    ),
+const activities_schema = z.array(
+  z.object({
+    timestamp: z.string(),
+    type: z.string(),
+    petIds: z.nullable(z.optional(z.array(z.string()))),
+    petWeight: z.nullable(z.optional(z.number())),
   }),
-});
+);
 
 const pets_schema = z.object({
   data: z.object({
@@ -123,11 +96,6 @@ const pets_schema = z.object({
         z.object({
           petId: z.string(),
           name: z.nullable(z.optional(z.string())),
-          weightHistory: z.nullable(
-            z.optional(
-              z.array(z.object({ weight: z.number(), timestamp: z.string() })),
-            ),
-          ),
         }),
       ),
     ),
@@ -278,6 +246,27 @@ async function graphql(
   return response.json();
 }
 
+async function rest_get(
+  url: string,
+  access_token: string,
+): Promise<unknown | fetch_error> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: api_headers(access_token) });
+  } catch (error) {
+    return {
+      type: 'error',
+      message: `litterbot rest request failed: ${String(error)}`,
+    };
+  }
+  if (!response.ok)
+    return {
+      type: 'error',
+      message: `litterbot rest returned ${response.status}: ${await response.text()}`,
+    };
+  return response.json();
+}
+
 function is_error(value: unknown): value is fetch_error {
   return (
     typeof value === 'object' &&
@@ -289,11 +278,8 @@ function is_error(value: unknown): value is fetch_error {
 
 export async function get_robots(
   access_token: string,
-  user_id: string,
 ): Promise<robot[] | fetch_error> {
-  const body = await graphql(LR4_GRAPHQL, access_token, GET_ROBOTS_QUERY, {
-    userId: user_id,
-  });
+  const body = await rest_get(`${EVO_ENDPOINT}/robots`, access_token);
   if (is_error(body)) return body;
   const parsed = z.safeParse(robots_schema, body);
   if (!parsed.success)
@@ -301,15 +287,20 @@ export async function get_robots(
       type: 'error',
       message: `unexpected litterbot robots response: ${parsed.error.message}`,
     };
-  return (parsed.data.data.getLitterRobot4ByUser ?? []).map((r) => ({
+  return parsed.data.map((r) => ({
     serial: r.serial,
     name: r.name ?? null,
-    is_online: r.isOnline ?? false,
-    pet_weight: r.catWeight && r.catWeight > 0 ? r.catWeight : null,
-    litter_level_pct:
-      r.litterLevelPercentage != null ? r.litterLevelPercentage * 100 : null,
-    waste_level_pct: r.DFILevelPercent ?? null,
+    is_online: r.state?.isOnline ?? false,
+    litter_level_pct: r.state?.litterLevelPercent ?? null,
+    waste_level_pct: r.state?.dfiLevelPercent ?? null,
   }));
+}
+
+/*
+ * EVO reports pet weight in hundredths of a pound (e.g. 723 => 7.23 lb).
+ */
+function to_pounds(weight: number | null | undefined): number | null {
+  return weight != null && weight > 0 ? weight / 100 : null;
 }
 
 export async function get_activity(
@@ -317,22 +308,22 @@ export async function get_activity(
   serial: string,
   limit = 20,
 ): Promise<activity[] | fetch_error> {
-  const body = await graphql(LR4_GRAPHQL, access_token, GET_ACTIVITY_QUERY, {
-    serial,
-    limit,
-    consumer: 'app',
-  });
+  const body = await rest_get(
+    `${EVO_ENDPOINT}/robots/${serial}/activities?limit=${limit}`,
+    access_token,
+  );
   if (is_error(body)) return body;
-  const parsed = z.safeParse(activity_schema, body);
+  const parsed = z.safeParse(activities_schema, body);
   if (!parsed.success)
     return {
       type: 'error',
       message: `unexpected litterbot activity response: ${parsed.error.message}`,
     };
-  return (parsed.data.data.getLitterRobot4Activity ?? []).map((a) => ({
+  return parsed.data.map((a) => ({
     timestamp: a.timestamp,
-    value: a.value,
-    action_value: a.actionValue ?? null,
+    type: a.type,
+    pet_id: a.petIds?.[0] ?? null,
+    pet_weight: to_pounds(a.petWeight),
   }));
 }
 
@@ -353,28 +344,14 @@ export async function get_pets(
   return (parsed.data.data.getPetsByUser ?? []).map((p) => ({
     id: p.petId,
     name: p.name ?? null,
-    weights: p.weightHistory ?? [],
   }));
 }
 
 /*
- * Best-effort attribution. Whisker performs the probabilistic weight matching
- * server-side; the result surfaces as a weight-history entry on the attributed
- * pet. We only join a visit to a pet when that entry already exists near the
- * visit timestamp. No probabilistic logic runs here.
+ * EVO attributes visits server-side and reports the matched pet directly on the
+ * PET_VISIT event via `petIds`. We resolve that id to a display name.
  */
-const ATTRIBUTION_WINDOW_MS = 5 * 60_000;
-
-export function attribute(pets: pet[], visit_at: string): string | null {
-  const visit_ms = Date.parse(visit_at);
-  if (Number.isNaN(visit_ms)) return null;
-  for (const pet of pets) {
-    for (const reading of pet.weights) {
-      const reading_ms = Date.parse(reading.timestamp);
-      if (Number.isNaN(reading_ms)) continue;
-      if (Math.abs(reading_ms - visit_ms) <= ATTRIBUTION_WINDOW_MS)
-        return pet.name;
-    }
-  }
-  return null;
+export function attribute(pets: pet[], pet_id: string | null): string | null {
+  if (pet_id === null) return null;
+  return pets.find((p) => p.id === pet_id)?.name ?? null;
 }

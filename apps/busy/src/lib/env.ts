@@ -27,10 +27,6 @@ export function litterbot_poll_url(env: Env): string {
   return `${env.API_HOST}/api/workflows/litterbot-poll`;
 }
 
-export function litterbot_recheck_url(env: Env): string {
-  return `${env.API_HOST}/api/workflows/litterbot-recheck`;
-}
-
 export function spotify_redirect_uri(env: Env): string {
   return `${env.API_HOST}/api/connections/spotify/callback`;
 }

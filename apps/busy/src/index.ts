@@ -13,7 +13,6 @@ import * as workflow from './features/workflow';
 import {
   type Env,
   litterbot_poll_url,
-  litterbot_recheck_url,
   parse_env,
   spotify_poll_url,
   spotify_redirect_uri,
@@ -67,19 +66,6 @@ const litterbot_poll_schema = z.object({
   event_id: z.string(),
 });
 
-const litterbot_visit_schema = z.object({
-  pet_name: z.nullable(z.string()),
-  pet_weight: z.nullable(z.number()),
-  litter_level_pct: z.nullable(z.number()),
-  waste_level_pct: z.nullable(z.number()),
-  visit_at: z.string(),
-});
-
-const litterbot_recheck_schema = z.object({
-  connection_id: z.string(),
-  visit: litterbot_visit_schema,
-});
-
 function poll_deps(env: Env, config: spotify_api.config): spotify.poll_deps {
   return {
     qstash: make_qstash(env),
@@ -93,7 +79,6 @@ function litterbot_deps(env: Env): litterbot.poll_deps {
   return {
     qstash: make_qstash(env),
     poll_url: litterbot_poll_url(env),
-    recheck_url: litterbot_recheck_url(env),
     workflow_url: workflow_url(env),
   };
 }
@@ -233,16 +218,6 @@ api.post('/workflows/litterbot-poll', async (c) => {
   const env = parse_env(c.env);
   const outcome = await with_db(env.DATABASE_URL, (rt) =>
     litterbot.handle_poll(rt, litterbot_deps(env), parsed.data),
-  );
-  return c.json(outcome, 200);
-});
-
-api.post('/workflows/litterbot-recheck', async (c) => {
-  const parsed = z.safeParse(litterbot_recheck_schema, await c.req.json());
-  if (!parsed.success) return c.json({ error: parsed.error }, 400);
-  const env = parse_env(c.env);
-  const outcome = await with_db(env.DATABASE_URL, (rt) =>
-    litterbot.handle_recheck(rt, litterbot_deps(env), parsed.data),
   );
   return c.json(outcome, 200);
 });
