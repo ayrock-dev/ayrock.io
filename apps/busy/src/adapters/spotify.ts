@@ -6,6 +6,7 @@ import * as devices from '../features/devices';
 import type { config, track } from '../features/spotify';
 import * as spotify from '../features/spotify';
 import * as workflow from '../features/workflow';
+import { to_printable_ascii } from '../lib/ascii';
 import {
   BusyEvent,
   type busy_event,
@@ -99,7 +100,7 @@ export class SpotifyEvent extends BusyEvent {
         {
           id: 'track_name',
           type: 'text',
-          text: this.track.name,
+          text: to_printable_ascii(this.track.name),
           x: text_x,
           y: 1,
           display: 'front',
@@ -112,7 +113,7 @@ export class SpotifyEvent extends BusyEvent {
         {
           id: 'track_artist',
           type: 'text',
-          text: this.track.artists.join(', '),
+          text: to_printable_ascii(this.track.artists.join(', ')),
           x: text_x,
           y: 9,
           display: 'front',
