@@ -2,18 +2,14 @@ import * as z from 'zod/mini';
 
 /*
  * Whisker (Litter Robot) has no public API. These endpoints and constants are
- * reverse-engineered from community prior art (pylitterbot, homebridge-litter-robot)
- * and may change or break at any time. We authenticate via an OAuth2 password
- * grant (username/password) — we deliberately avoid Whisker's newer Cognito/SRP
- * flow to keep this adapter free of bespoke auth crypto.
+ * reverse-engineered from community prior art (pylitterbot) and may change or
+ * break at any time. We authenticate with username/password via AWS Cognito's
+ * USER_PASSWORD_AUTH flow — a plain HTTPS POST, deliberately avoiding SRP so this
+ * adapter carries no bespoke auth crypto. The id token is the bearer for the
+ * AppSync GraphQL APIs; the whisker user id is the token's `mid` claim.
  */
-export const LITTER_ROBOT_CLIENT_ID = 'IYXzWN908psOm7sNpe4G.ios.whisker.robots';
-const LITTER_ROBOT_CLIENT_SECRET = 'C63CLXOmwNaqLTB2xXo6QIWGwwBamcPuaul';
-export const LITTER_ROBOT_API_PUBLIC_KEY =
-  'p7ndMoj61npRZP5CVz9v4Uj0bG769xy6758QRBPb';
-
-const TOKEN_ENDPOINT = 'https://autopets.sso.iothings.site/oauth/token';
-const V2_BASE = 'https://v2.api.whisker.iothings.site';
+const LITTER_ROBOT_CLIENT_ID = '4552ujeu3aic90nf8qn53levmn';
+const COGNITO_ENDPOINT = 'https://cognito-idp.us-east-1.amazonaws.com/';
 const LR4_GRAPHQL = 'https://lr4.iothings.site/graphql';
 const PET_GRAPHQL = 'https://pet-profile.iothings.site/graphql/';
 
@@ -80,14 +76,13 @@ export type pet = {
 
 export type fetch_error = { type: 'error'; message: string };
 
-const token_schema = z.object({
-  access_token: z.string(),
-  refresh_token: z.string(),
-  expires_in: z.number(),
-});
-
-const user_schema = z.object({
-  user: z.object({ userId: z.string() }),
+const auth_result_schema = z.object({
+  AuthenticationResult: z.object({
+    AccessToken: z.string(),
+    IdToken: z.string(),
+    RefreshToken: z.optional(z.string()),
+    ExpiresIn: z.number(),
+  }),
 });
 
 const robots_schema = z.object({
@@ -142,85 +137,118 @@ const pets_schema = z.object({
 function api_headers(access_token: string): Record<string, string> {
   return {
     authorization: `Bearer ${access_token}`,
-    'x-api-key': LITTER_ROBOT_API_PUBLIC_KEY,
     'content-type': 'application/json',
   };
 }
 
-async function post_token(body: Record<string, string>): Promise<token_result> {
+async function initiate_auth(
+  auth_flow: string,
+  auth_parameters: Record<string, string>,
+  refresh_token: string | null,
+): Promise<token_result> {
   let response: Response;
   try {
-    response = await fetch(TOKEN_ENDPOINT, {
+    response = await fetch(COGNITO_ENDPOINT, {
       method: 'POST',
       headers: {
-        'x-api-key': LITTER_ROBOT_API_PUBLIC_KEY,
-        'content-type': 'application/x-www-form-urlencoded',
+        'content-type': 'application/x-amz-json-1.1',
+        'x-amz-target': 'AWSCognitoIdentityProviderService.InitiateAuth',
       },
-      body: new URLSearchParams({
-        client_id: LITTER_ROBOT_CLIENT_ID,
-        client_secret: LITTER_ROBOT_CLIENT_SECRET,
-        ...body,
-      }).toString(),
+      body: JSON.stringify({
+        AuthFlow: auth_flow,
+        ClientId: LITTER_ROBOT_CLIENT_ID,
+        AuthParameters: auth_parameters,
+      }),
     });
   } catch (error) {
     return {
       type: 'error',
-      message: `litterbot token request failed: ${String(error)}`,
+      message: `litterbot auth request failed: ${String(error)}`,
     };
   }
-  if (!response.ok) {
+  const raw = await response.text();
+  if (!response.ok)
     return {
       type: 'error',
-      message: `litterbot token endpoint returned ${response.status}: ${await response.text()}`,
+      message: `litterbot auth returned ${response.status}: ${raw}`,
     };
-  }
-  const parsed = z.safeParse(token_schema, await response.json());
-  if (!parsed.success) {
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
     return {
       type: 'error',
-      message: `unexpected litterbot token response: ${parsed.error.message}`,
+      message: `litterbot auth returned non-JSON: ${raw}`,
     };
   }
-  return { type: 'ok', token: parsed.data };
+  const parsed = z.safeParse(auth_result_schema, json);
+  if (!parsed.success)
+    return {
+      type: 'error',
+      message: `litterbot auth did not return tokens (a challenge may be required): ${raw}`,
+    };
+  const result = parsed.data.AuthenticationResult;
+  const next_refresh = result.RefreshToken ?? refresh_token;
+  if (next_refresh === null)
+    return {
+      type: 'error',
+      message: 'litterbot auth returned no refresh token',
+    };
+  return {
+    type: 'ok',
+    token: {
+      access_token: result.IdToken,
+      refresh_token: next_refresh,
+      expires_in: result.ExpiresIn,
+    },
+  };
 }
 
 export function login(
   username: string,
   password: string,
 ): Promise<token_result> {
-  return post_token({ grant_type: 'password', username, password });
+  return initiate_auth(
+    'USER_PASSWORD_AUTH',
+    { USERNAME: username, PASSWORD: password },
+    null,
+  );
 }
 
 export function refresh(refresh_token: string): Promise<token_result> {
-  return post_token({ grant_type: 'refresh_token', refresh_token });
+  return initiate_auth(
+    'REFRESH_TOKEN_AUTH',
+    { REFRESH_TOKEN: refresh_token },
+    refresh_token,
+  );
 }
 
-export async function get_user_id(
-  access_token: string,
-): Promise<string | fetch_error> {
-  let response: Response;
+/*
+ * The whisker user id is the `mid` claim of the Cognito id token. We decode the
+ * JWT payload without verifying the signature: the token was just issued to us
+ * over TLS and is only used to address our own account's data.
+ */
+export function get_user_id(id_token: string): string | fetch_error {
+  const part = id_token.split('.')[1];
+  if (part === undefined)
+    return { type: 'error', message: 'litterbot id token is not a JWT' };
   try {
-    response = await fetch(`${V2_BASE}/users`, {
-      headers: api_headers(access_token),
-    });
+    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
+    const claims: unknown = JSON.parse(json);
+    if (
+      typeof claims === 'object' &&
+      claims !== null &&
+      'mid' in claims &&
+      typeof (claims as { mid: unknown }).mid === 'string'
+    )
+      return (claims as { mid: string }).mid;
+    return { type: 'error', message: 'litterbot id token missing mid claim' };
   } catch (error) {
     return {
       type: 'error',
-      message: `litterbot users request failed: ${String(error)}`,
+      message: `litterbot id token decode failed: ${String(error)}`,
     };
   }
-  if (!response.ok)
-    return {
-      type: 'error',
-      message: `litterbot users endpoint returned ${response.status}`,
-    };
-  const parsed = z.safeParse(user_schema, await response.json());
-  if (!parsed.success)
-    return {
-      type: 'error',
-      message: `unexpected litterbot users response: ${parsed.error.message}`,
-    };
-  return parsed.data.user.userId;
 }
 
 async function graphql(
