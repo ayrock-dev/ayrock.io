@@ -35,7 +35,7 @@ function spotify_config(env: Env): spotify_api.config | null {
 
 const device_input_schema = z.object({
   name: z.optional(z.nullable(z.string())),
-  busybar_auth: z.optional(z.string()),
+  access_token: z.optional(z.string()),
 });
 
 const draw_element_schema = z.custom<DisplayElements['elements'][number]>(
@@ -71,7 +71,7 @@ api.get('/devices', async (c) => {
     list.map((d) => ({
       id: d.id,
       name: d.name,
-      busybar: d.busybar_auth !== undefined,
+      busybar: d.access_token !== null,
     })),
   );
 });
@@ -149,7 +149,7 @@ api.get('/connections/spotify/callback', async (c) => {
     return c.json({ error: 'spotify did not return a refresh token' }, 502);
   const refresh_token = result.refresh_token;
   const access_token = result.access_token;
-  const expires_at = Date.now() + result.expires_in * 1000;
+  const expires_at = new Date(Date.now() + result.expires_in * 1000);
 
   const env = parse_env(c.env);
   const updated = await with_db(env.DATABASE_URL, (rt) =>
@@ -213,7 +213,7 @@ async function scheduled(_event: ScheduledController, env: Env): Promise<void> {
   const deps = poll_deps(parsed, config);
   await with_db(parsed.DATABASE_URL, async (rt) => {
     for (const conn of await connections.all(rt)) {
-      if (conn.type !== 'spotify' || !conn.spotify_auth) continue;
+      if (conn.type !== 'spotify') continue;
       await spotify.ensure_scheduled(rt, deps, conn);
     }
   });

@@ -138,21 +138,14 @@ async function access_token_for(
   conn: connection,
   config: config,
 ): Promise<string | null> {
-  const auth = conn.spotify_auth;
-  if (!auth) return null;
+  if (conn.expires_at.getTime() > Date.now() + 10_000) return conn.access_token;
 
-  const valid =
-    auth.access_token !== undefined &&
-    auth.expires_at !== undefined &&
-    auth.expires_at > Date.now() + 10_000;
-  if (valid && auth.access_token !== undefined) return auth.access_token;
-
-  const result = await spotify.refresh_access_token(config, auth.refresh_token);
+  const result = await spotify.refresh_access_token(config, conn.refresh_token);
   if (result.type === 'error') return null;
 
   await connections.set_spotify_auth(rt, conn.user_id, {
     access_token: result.access_token,
-    expires_at: Date.now() + result.expires_in * 1000,
+    expires_at: new Date(Date.now() + result.expires_in * 1000),
     ...(result.refresh_token !== undefined
       ? { refresh_token: result.refresh_token }
       : {}),
@@ -204,7 +197,7 @@ async function schedule(
   const event_id = nanoid();
   await connections.set_poll_state(rt, connection_id, {
     event_id,
-    next_event_at: Date.now() + delay_s * 1000 + grace_ms,
+    next_event_at: new Date(Date.now() + delay_s * 1000 + grace_ms),
   });
   try {
     await deps.qstash
@@ -232,6 +225,29 @@ async function drop(rt: DbRuntime, connection_id: string): Promise<void> {
   });
 }
 
+type playing = Extract<spotify.now_playing_result, { type: 'playing' }>;
+
+async function draw_and_arm(
+  rt: DbRuntime,
+  deps: poll_deps,
+  conn: connection,
+  state: playing,
+): Promise<void> {
+  const remaining_ms = Math.max(state.duration_ms - state.progress_ms, 0);
+  const delay_s = delay_for(remaining_ms);
+
+  for (const device of await devices.all(rt, conn.user_id)) {
+    if (device.access_token === null) continue;
+    await workflow.enqueue(
+      deps.qstash,
+      deps.workflow_url,
+      to_event(device.id, state.track, delay_s),
+    );
+  }
+
+  await schedule(rt, deps, conn.id, delay_s);
+}
+
 export type poll_outcome =
   | { status: 'playing' }
   | { status: 'idle' }
@@ -246,8 +262,7 @@ export async function handle_poll(
   payload: { connection_id: string; event_id: string },
 ): Promise<poll_outcome> {
   const conn = await connections.get_by_id(rt, payload.connection_id);
-  if (conn?.type !== 'spotify' || !conn.spotify_auth)
-    return { status: 'unknown' };
+  if (conn?.type !== 'spotify') return { status: 'unknown' };
   if (conn.event_id !== payload.event_id) return { status: 'superseded' };
 
   const token = await access_token_for(rt, conn, deps.config);
@@ -266,19 +281,7 @@ export async function handle_poll(
     return { status: 'idle' };
   }
 
-  const remaining_ms = Math.max(state.duration_ms - state.progress_ms, 0);
-  const delay_s = delay_for(remaining_ms);
-
-  for (const device of await devices.all(rt, conn.user_id)) {
-    if (device.busybar_auth === undefined) continue;
-    await workflow.enqueue(
-      deps.qstash,
-      deps.workflow_url,
-      to_event(device.id, state.track, delay_s),
-    );
-  }
-
-  await schedule(rt, deps, conn.id, delay_s);
+  await draw_and_arm(rt, deps, conn, state);
   return { status: 'playing' };
 }
 
@@ -288,9 +291,16 @@ export async function ensure_scheduled(
   conn: connection,
 ): Promise<void> {
   const alive =
-    conn.event_id !== undefined &&
-    conn.next_event_at !== undefined &&
-    conn.next_event_at > Date.now();
+    conn.event_id !== null &&
+    conn.next_event_at !== null &&
+    conn.next_event_at.getTime() > Date.now();
   if (alive) return;
-  await schedule(rt, deps, conn.id, 0);
+
+  const token = await access_token_for(rt, conn, deps.config);
+  if (!token) return;
+
+  const state = await spotify.now_playing(token);
+  if (state.type !== 'playing') return;
+
+  await draw_and_arm(rt, deps, conn, state);
 }

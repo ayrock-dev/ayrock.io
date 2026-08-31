@@ -91,7 +91,7 @@ async function add_device(e) {
   const name = el('device-name').value.trim();
   const token = el('device-token').value.trim();
   const body = { name: name || null };
-  if (token) body.busybar_auth = token;
+  if (token) body.access_token = token;
   const res = await api('/devices', {
     method: 'POST',
     body: JSON.stringify(body),

@@ -28,9 +28,9 @@ model Connection {
   created_at    DateTime  @default(now())
   updated_at    temporal.updatedAt()
   type          String
-  access_token  String?
-  refresh_token String?
-  expires_at    DateTime?
+  access_token  String
+  refresh_token String
+  expires_at    DateTime
   event_id      String?
   next_event_at DateTime?
   user          User      @relation(fields: [user_id], references: [id])

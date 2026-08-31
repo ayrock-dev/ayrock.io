@@ -56,7 +56,7 @@ export async function handle(
   event: busy_event,
 ): Promise<draw_result> {
   const device = await devices.get(rt, event.device_id);
-  const token = device?.busybar_auth;
+  const token = device?.access_token ?? null;
   if (!token) return { status: 'no_token' };
   try {
     await busybar.draw(token, render(event));

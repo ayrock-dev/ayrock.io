@@ -6,8 +6,11 @@
   "scripts": {
     "dev": "pnpm -r dev",
     "build": "pnpm -r build",
+    "deploy": "pnpm -r deploy",
     "db:generate": "pnpm -r db:generate",
+    "db:push": "pnpm -r db:push",
     "format": "biome format .",
+    "typecheck": "pnpm -r typecheck",
     "lint": "biome lint .",
     "check": "biome check .",
     "check:fix": "biome check --fix --unsafe ."

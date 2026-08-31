@@ -10,7 +10,6 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma contract emit",
-    "db:init": "prisma db init",
     "db:push": "prisma db update"
   },
   "dependencies": {
