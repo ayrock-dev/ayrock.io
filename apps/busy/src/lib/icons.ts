@@ -114,17 +114,22 @@ export function cat_icon(pet_name: string | null): icon {
 
 export type icon_asset = { path: string; data: Uint8Array };
 
-export const spotify_path = 'icons/spotify.png';
+/*
+ * Asset paths are flat (no subdirectory). The device's upload handler only
+ * creates a single directory level (`user_assets/<app>/`), so a nested path like
+ * `icons/spotify.png` would fail to open for writing.
+ */
+export const spotify_path = 'spotify.png';
 
 /*
  * The asset path is keyed by theme so each pet variant is a distinct file on the
- * device (e.g. `icons/cat-winky.png`, else `icons/cat.png`). Renderers reference
- * this path; the bytes are uploaded separately via `all_assets`.
+ * device (e.g. `cat-winky.png`, else `cat.png`). Renderers reference this path;
+ * the bytes are uploaded separately via `all_assets`.
  */
 export function cat_path(pet_name: string | null): string {
   const key = pet_name === null ? null : normalize_pet_name(pet_name);
   const themed = key !== null && key in cat_themes;
-  return `icons/cat${themed ? `-${key}` : ''}.png`;
+  return `cat${themed ? `-${key}` : ''}.png`;
 }
 
 export function cat_asset(pet_name: string | null): icon_asset {
