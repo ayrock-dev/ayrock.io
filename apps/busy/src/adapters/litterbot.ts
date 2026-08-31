@@ -14,10 +14,6 @@ import {
 } from '../lib/events';
 import { nanoid } from '../lib/nanoid';
 import type { DbRuntime } from '../lib/prisma';
-import {
-  litterbot_poll_queue_name,
-  litterbot_recheck_queue_name,
-} from '../lib/upstash';
 
 const B = '#00A3E0FF';
 const W = '#FFFFFFFF';
@@ -204,15 +200,13 @@ async function schedule(
     next_event_at: new Date(Date.now() + (delay_s + poll_grace_s) * 1000),
   });
   try {
-    await deps.qstash
-      .queue({ queueName: litterbot_poll_queue_name })
-      .enqueueJSON({
-        url: deps.poll_url,
-        body: { connection_id, event_id },
-        delay: delay_s,
-        deduplicationId: event_id,
-        retries: 3,
-      });
+    await deps.qstash.publishJSON({
+      url: deps.poll_url,
+      body: { connection_id, event_id },
+      delay: delay_s,
+      deduplicationId: event_id,
+      retries: 3,
+    });
   } catch (error) {
     await connections.set_poll_state(rt, connection_id, {
       event_id: null,
@@ -250,15 +244,13 @@ async function enqueue_recheck(
   connection_id: string,
   v: visit,
 ): Promise<void> {
-  await deps.qstash
-    .queue({ queueName: litterbot_recheck_queue_name })
-    .enqueueJSON({
-      url: deps.recheck_url,
-      body: { connection_id, visit: v },
-      delay: recheck_delay_s,
-      deduplicationId: `${connection_id}:${v.visit_at}`,
-      retries: 3,
-    });
+  await deps.qstash.publishJSON({
+    url: deps.recheck_url,
+    body: { connection_id, visit: v },
+    delay: recheck_delay_s,
+    deduplicationId: `${connection_id}:${v.visit_at}`,
+    retries: 3,
+  });
 }
 
 export type poll_outcome =

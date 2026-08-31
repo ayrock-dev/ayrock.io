@@ -15,7 +15,6 @@ import {
 } from '../lib/events';
 import { nanoid } from '../lib/nanoid';
 import type { DbRuntime } from '../lib/prisma';
-import { spotify_poll_queue_name } from '../lib/upstash';
 
 const G = '#1DB954FF';
 const W = '#FFFFFFFF';
@@ -201,15 +200,13 @@ async function schedule(
     next_event_at: new Date(Date.now() + delay_s * 1000 + grace_ms),
   });
   try {
-    await deps.qstash
-      .queue({ queueName: spotify_poll_queue_name })
-      .enqueueJSON({
-        url: deps.poll_url,
-        body: { connection_id, event_id },
-        delay: delay_s,
-        deduplicationId: event_id,
-        retries: 3,
-      });
+    await deps.qstash.publishJSON({
+      url: deps.poll_url,
+      body: { connection_id, event_id },
+      delay: delay_s,
+      deduplicationId: event_id,
+      retries: 3,
+    });
   } catch (error) {
     await connections.set_poll_state(rt, connection_id, {
       event_id: null,
