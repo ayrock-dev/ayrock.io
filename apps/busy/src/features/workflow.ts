@@ -64,8 +64,15 @@ export async function enqueue(
 export type draw_result =
   | { status: 'ok' }
   | { status: 'no_token' }
-  | { status: 'conflict' };
+  | { status: 'conflict' }
+  | { status: 'draw_failed'; message: string };
 
+/*
+ * Draw a single event. Expected, non-retryable outcomes (missing token, busy
+ * display, a frame the device rejects) are returned as values, not thrown, so
+ * the queue consumer can ack them. Only unexpected faults (e.g. DB access)
+ * propagate.
+ */
 export async function handle(
   rt: DbRuntime,
   event: busy_event,
@@ -78,6 +85,6 @@ export async function handle(
     return { status: 'ok' };
   } catch (error) {
     if (is_conflict(error)) return { status: 'conflict' };
-    throw error;
+    return { status: 'draw_failed', message: String(error) };
   }
 }

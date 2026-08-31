@@ -276,11 +276,14 @@ api.post('/workflows/event', async (c) => {
   const result = await with_db(env.DATABASE_URL, (rt) =>
     workflow.handle(rt, parsed.data),
   );
-  if (result.status === 'conflict')
-    return c.json({ error: 'display busy' }, 409);
-  if (result.status === 'no_token')
-    return c.json({ error: 'no busybar token' }, 422);
-  return c.json({ drawn: true }, 200);
+  // Always ack (2xx). This is a FIFO qstash queue: a non-2xx response makes
+  // qstash retry and head-of-line-block the queue, backing up every device.
+  // None of these outcomes are fixed by retrying the same (now stale) frame;
+  // the next poll enqueues a fresh one. Genuine infra faults (e.g. DB access)
+  // still throw from `with_db` above and surface as 500 for a legitimate retry.
+  if (result.status === 'draw_failed')
+    console.warn(`draw failed for ${parsed.data.device_id}: ${result.message}`);
+  return c.json(result, 200);
 });
 
 /*
