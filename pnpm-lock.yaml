@@ -35,6 +35,12 @@ importers:
       '@upstash/qstash':
         specifier: ^2.11.3
         version: 2.11.3
+      better-result:
+        specifier: ^3.0.1
+        version: 3.0.1
+      evlog:
+        specifier: ^2.28.0
+        version: 2.28.0(hono@4.13.3)(react@19.2.5)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0))
       hono:
         specifier: ^4.10.7
         version: 4.13.3
@@ -2321,6 +2327,9 @@ packages:
   better-result@2.10.0:
     resolution: {integrity: sha512-oQhh0y1qo2/ZKdAAEvHZAqKKiHOFU5k/bW96fE2ScgQOVkJRiHwB+nOS1SgFsYqRlxMDWvefXi9Q3px7QvgNDw==}
 
+  better-result@3.0.1:
+    resolution: {integrity: sha512-rnCeqEXkKPHmz5MO5ZroPRDyHe4YvlNPyy7qj8cVcWs/GnvSvC3086G74/220W+wWcIWlXgzvcjskFV0A4blUQ==}
+
   binary-extensions@2.3.0:
     resolution: {integrity: sha512-Ceh+7ox5qe7LJuLHoY0feh3pHuUDHAcRUeyL2VYghZwfpkNIy/+8Ocg0a3UuSoYzavmylwuLWQOf3hl0jjMMIw==}
     engines: {node: '>=8'}
@@ -2569,6 +2578,66 @@ packages:
 
   events-universal@1.0.1:
     resolution: {integrity: sha512-LUd5euvbMLpwOF8m6ivPCbhQeSiYVNb8Vs0fQ8QjXo0JTkEHpz8pxdQf0gStltaPpw0Cca8b39KxvK9cfKRiAw==}
+
+  evlog@2.28.0:
+    resolution: {integrity: sha512-P7kmMGo9VWgDFMz4vRu1VriIi3dysp/wGQM7SS4fjV44XHS+Mm3/xtz0rDM1ugDGkCQeZStsTc5pOxSgF8Q1JQ==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      '@nestjs/common': '>=11.1.28'
+      '@nuxt/kit': ^4.4.2
+      '@orpc/server': '>=1.14.8'
+      '@tanstack/start-client-core': ^1.170.14
+      ai: '>=6.0.168 <8.0.0'
+      elysia: '>=1.4.29'
+      eve: '>=0.30.0'
+      express: '>=5.2.1'
+      fastify: '>=5.10.0'
+      h3: ^1.15.11
+      hono: '>=4.12.30'
+      next: '>=16.2.10'
+      nitro: ^3.0.260311-beta
+      nitropack: ^2.13.4
+      ofetch: ^1.5.1
+      react: '>=19.2.7'
+      react-router: '>=7.18.1'
+      vite: ^7.0.0 || ^8.0.0
+    peerDependenciesMeta:
+      '@nestjs/common':
+        optional: true
+      '@nuxt/kit':
+        optional: true
+      '@orpc/server':
+        optional: true
+      '@tanstack/start-client-core':
+        optional: true
+      ai:
+        optional: true
+      elysia:
+        optional: true
+      eve:
+        optional: true
+      express:
+        optional: true
+      fastify:
+        optional: true
+      h3:
+        optional: true
+      hono:
+        optional: true
+      next:
+        optional: true
+      nitro:
+        optional: true
+      nitropack:
+        optional: true
+      ofetch:
+        optional: true
+      react:
+        optional: true
+      react-router:
+        optional: true
+      vite:
+        optional: true
 
   execa@9.6.1:
     resolution: {integrity: sha512-9Be3ZoN4LmYR90tUoVu2te2BsbzHfhJyfEiAVfz7N5/zv+jduIfLrV2xdQXOHbaD6KgpGdO9PRPM1Y4Q9QkPkA==}
@@ -6082,6 +6151,8 @@ snapshots:
 
   better-result@2.10.0: {}
 
+  better-result@3.0.1: {}
+
   binary-extensions@2.3.0: {}
 
   bindings@1.5.0:
@@ -6379,6 +6450,12 @@ snapshots:
       bare-events: 2.9.1
     transitivePeerDependencies:
       - bare-abort-controller
+
+  evlog@2.28.0(hono@4.13.3)(react@19.2.5)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0)):
+    optionalDependencies:
+      hono: 4.13.3
+      react: 19.2.5
+      vite: 8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0)
 
   execa@9.6.1:
     dependencies:

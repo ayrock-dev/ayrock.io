@@ -1,4 +1,15 @@
+import { Result } from 'better-result';
 import * as z from 'zod/mini';
+import {
+  error_message,
+  LitterbotAuthIncomplete,
+  LitterbotMalformedResponse,
+  LitterbotNonJson,
+  LitterbotRequestFailed,
+  LitterbotTokenInvalid,
+  LitterbotUnexpectedStatus,
+  type litterbot_error,
+} from '../lib/errors';
 
 /*
  * Whisker (Litter Robot) has no public API. These endpoints and constants are
@@ -31,10 +42,6 @@ export type token = {
   expires_in: number;
 };
 
-export type token_result =
-  | { type: 'ok'; token: token }
-  | { type: 'error'; message: string };
-
 export type robot = {
   serial: string;
   name: string | null;
@@ -54,8 +61,6 @@ export type pet = {
   id: string;
   name: string | null;
 };
-
-export type fetch_error = { type: 'error'; message: string };
 
 const auth_result_schema = z.object({
   AuthenticationResult: z.object({
@@ -113,69 +118,78 @@ async function initiate_auth(
   auth_flow: string,
   auth_parameters: Record<string, string>,
   refresh_token: string | null,
-): Promise<token_result> {
-  let response: Response;
-  try {
-    response = await fetch(COGNITO_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-amz-json-1.1',
-        'x-amz-target': 'AWSCognitoIdentityProviderService.InitiateAuth',
-      },
-      body: JSON.stringify({
-        AuthFlow: auth_flow,
-        ClientId: LITTER_ROBOT_CLIENT_ID,
-        AuthParameters: auth_parameters,
+): Promise<Result<token, litterbot_error>> {
+  const response = await Result.tryPromise({
+    try: () =>
+      fetch(COGNITO_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/x-amz-json-1.1',
+          'x-amz-target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+        },
+        body: JSON.stringify({
+          AuthFlow: auth_flow,
+          ClientId: LITTER_ROBOT_CLIENT_ID,
+          AuthParameters: auth_parameters,
+        }),
       }),
-    });
-  } catch (error) {
-    return {
-      type: 'error',
-      message: `litterbot auth request failed: ${String(error)}`,
-    };
-  }
-  const raw = await response.text();
-  if (!response.ok)
-    return {
-      type: 'error',
-      message: `litterbot auth returned ${response.status}: ${raw}`,
-    };
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch {
-    return {
-      type: 'error',
-      message: `litterbot auth returned non-JSON: ${raw}`,
-    };
-  }
-  const parsed = z.safeParse(auth_result_schema, json);
+    catch: (cause) =>
+      new LitterbotRequestFailed({
+        message: `litterbot auth request failed before a response: ${error_message(cause)}`,
+        endpoint: COGNITO_ENDPOINT,
+        cause,
+      }),
+  });
+  if (response.isErr()) return response;
+
+  const raw = await response.value.text();
+  if (!response.value.ok)
+    return Result.err(
+      new LitterbotUnexpectedStatus({
+        message: `litterbot auth returned ${response.value.status}`,
+        endpoint: COGNITO_ENDPOINT,
+        status: response.value.status,
+        body: raw,
+      }),
+    );
+
+  const json = Result.try({
+    try: () => JSON.parse(raw) as unknown,
+    catch: () =>
+      new LitterbotNonJson({
+        message: 'litterbot auth returned non-JSON',
+        endpoint: COGNITO_ENDPOINT,
+        body: raw,
+      }),
+  });
+  if (json.isErr()) return json;
+
+  const parsed = z.safeParse(auth_result_schema, json.value);
   if (!parsed.success)
-    return {
-      type: 'error',
-      message: `litterbot auth did not return tokens (a challenge may be required): ${raw}`,
-    };
+    return Result.err(
+      new LitterbotAuthIncomplete({
+        message: `litterbot auth did not return tokens (a challenge may be required): ${raw}`,
+      }),
+    );
   const result = parsed.data.AuthenticationResult;
   const next_refresh = result.RefreshToken ?? refresh_token;
   if (next_refresh === null)
-    return {
-      type: 'error',
-      message: 'litterbot auth returned no refresh token',
-    };
-  return {
-    type: 'ok',
-    token: {
-      access_token: result.IdToken,
-      refresh_token: next_refresh,
-      expires_in: result.ExpiresIn,
-    },
-  };
+    return Result.err(
+      new LitterbotAuthIncomplete({
+        message: 'litterbot auth returned no refresh token',
+      }),
+    );
+  return Result.ok({
+    access_token: result.IdToken,
+    refresh_token: next_refresh,
+    expires_in: result.ExpiresIn,
+  });
 }
 
 export function login(
   username: string,
   password: string,
-): Promise<token_result> {
+): Promise<Result<token, litterbot_error>> {
   return initiate_auth(
     'USER_PASSWORD_AUTH',
     { USERNAME: username, PASSWORD: password },
@@ -183,7 +197,9 @@ export function login(
   );
 }
 
-export function refresh(refresh_token: string): Promise<token_result> {
+export function refresh(
+  refresh_token: string,
+): Promise<Result<token, litterbot_error>> {
   return initiate_auth(
     'REFRESH_TOKEN_AUTH',
     { REFRESH_TOKEN: refresh_token },
@@ -196,27 +212,39 @@ export function refresh(refresh_token: string): Promise<token_result> {
  * JWT payload without verifying the signature: the token was just issued to us
  * over TLS and is only used to address our own account's data.
  */
-export function get_user_id(id_token: string): string | fetch_error {
+export function get_user_id(
+  id_token: string,
+): Result<string, LitterbotTokenInvalid> {
   const part = id_token.split('.')[1];
   if (part === undefined)
-    return { type: 'error', message: 'litterbot id token is not a JWT' };
-  try {
-    const json = atob(part.replace(/-/g, '+').replace(/_/g, '/'));
-    const claims: unknown = JSON.parse(json);
-    if (
-      typeof claims === 'object' &&
-      claims !== null &&
-      'mid' in claims &&
-      typeof (claims as { mid: unknown }).mid === 'string'
-    )
-      return (claims as { mid: string }).mid;
-    return { type: 'error', message: 'litterbot id token missing mid claim' };
-  } catch (error) {
-    return {
-      type: 'error',
-      message: `litterbot id token decode failed: ${String(error)}`,
-    };
-  }
+    return Result.err(
+      new LitterbotTokenInvalid({
+        message: 'litterbot id token is not a JWT',
+      }),
+    );
+  const claims = Result.try({
+    try: () =>
+      JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/'))) as unknown,
+    catch: (cause) =>
+      new LitterbotTokenInvalid({
+        message: `litterbot id token decode failed: ${error_message(cause)}`,
+        cause,
+      }),
+  });
+  if (claims.isErr()) return claims;
+  const value = claims.value;
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'mid' in value &&
+    typeof (value as { mid: unknown }).mid === 'string'
+  )
+    return Result.ok((value as { mid: string }).mid);
+  return Result.err(
+    new LitterbotTokenInvalid({
+      message: 'litterbot id token missing mid claim',
+    }),
+  );
 }
 
 async function graphql(
@@ -224,76 +252,83 @@ async function graphql(
   access_token: string,
   query: string,
   variables: Record<string, unknown>,
-): Promise<unknown | fetch_error> {
-  let response: Response;
-  try {
-    response = await fetch(endpoint, {
-      method: 'POST',
-      headers: api_headers(access_token),
-      body: JSON.stringify({ query, variables }),
-    });
-  } catch (error) {
-    return {
-      type: 'error',
-      message: `litterbot graphql request failed: ${String(error)}`,
-    };
-  }
-  if (!response.ok)
-    return {
-      type: 'error',
-      message: `litterbot graphql returned ${response.status}: ${await response.text()}`,
-    };
-  return response.json();
+): Promise<Result<unknown, litterbot_error>> {
+  const response = await Result.tryPromise({
+    try: () =>
+      fetch(endpoint, {
+        method: 'POST',
+        headers: api_headers(access_token),
+        body: JSON.stringify({ query, variables }),
+      }),
+    catch: (cause) =>
+      new LitterbotRequestFailed({
+        message: `litterbot graphql request failed before a response: ${error_message(cause)}`,
+        endpoint,
+        cause,
+      }),
+  });
+  if (response.isErr()) return response;
+  if (!response.value.ok)
+    return Result.err(
+      new LitterbotUnexpectedStatus({
+        message: `litterbot graphql returned ${response.value.status}`,
+        endpoint,
+        status: response.value.status,
+        body: await response.value.text(),
+      }),
+    );
+  return Result.ok(await response.value.json());
 }
 
 async function rest_get(
   url: string,
   access_token: string,
-): Promise<unknown | fetch_error> {
-  let response: Response;
-  try {
-    response = await fetch(url, { headers: api_headers(access_token) });
-  } catch (error) {
-    return {
-      type: 'error',
-      message: `litterbot rest request failed: ${String(error)}`,
-    };
-  }
-  if (!response.ok)
-    return {
-      type: 'error',
-      message: `litterbot rest returned ${response.status}: ${await response.text()}`,
-    };
-  return response.json();
-}
-
-function is_error(value: unknown): value is fetch_error {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'type' in value &&
-    (value as { type: unknown }).type === 'error'
-  );
+): Promise<Result<unknown, litterbot_error>> {
+  const response = await Result.tryPromise({
+    try: () => fetch(url, { headers: api_headers(access_token) }),
+    catch: (cause) =>
+      new LitterbotRequestFailed({
+        message: `litterbot rest request failed before a response: ${error_message(cause)}`,
+        endpoint: url,
+        cause,
+      }),
+  });
+  if (response.isErr()) return response;
+  if (!response.value.ok)
+    return Result.err(
+      new LitterbotUnexpectedStatus({
+        message: `litterbot rest returned ${response.value.status}`,
+        endpoint: url,
+        status: response.value.status,
+        body: await response.value.text(),
+      }),
+    );
+  return Result.ok(await response.value.json());
 }
 
 export async function get_robots(
   access_token: string,
-): Promise<robot[] | fetch_error> {
-  const body = await rest_get(`${EVO_ENDPOINT}/robots`, access_token);
-  if (is_error(body)) return body;
-  const parsed = z.safeParse(robots_schema, body);
+): Promise<Result<robot[], litterbot_error>> {
+  const endpoint = `${EVO_ENDPOINT}/robots`;
+  const body = await rest_get(endpoint, access_token);
+  if (body.isErr()) return body;
+  const parsed = z.safeParse(robots_schema, body.value);
   if (!parsed.success)
-    return {
-      type: 'error',
-      message: `unexpected litterbot robots response: ${parsed.error.message}`,
-    };
-  return parsed.data.map((r) => ({
-    serial: r.serial,
-    name: r.name ?? null,
-    is_online: r.state?.isOnline ?? false,
-    litter_level_pct: r.state?.litterLevelPercent ?? null,
-    waste_level_pct: r.state?.dfiLevelPercent ?? null,
-  }));
+    return Result.err(
+      new LitterbotMalformedResponse({
+        message: `unexpected litterbot robots response: ${parsed.error.message}`,
+        endpoint,
+      }),
+    );
+  return Result.ok(
+    parsed.data.map((r) => ({
+      serial: r.serial,
+      name: r.name ?? null,
+      is_online: r.state?.isOnline ?? false,
+      litter_level_pct: r.state?.litterLevelPercent ?? null,
+      waste_level_pct: r.state?.dfiLevelPercent ?? null,
+    })),
+  );
 }
 
 /*
@@ -307,44 +342,50 @@ export async function get_activity(
   access_token: string,
   serial: string,
   limit = 20,
-): Promise<activity[] | fetch_error> {
-  const body = await rest_get(
-    `${EVO_ENDPOINT}/robots/${serial}/activities?limit=${limit}`,
-    access_token,
-  );
-  if (is_error(body)) return body;
-  const parsed = z.safeParse(activities_schema, body);
+): Promise<Result<activity[], litterbot_error>> {
+  const endpoint = `${EVO_ENDPOINT}/robots/${serial}/activities?limit=${limit}`;
+  const body = await rest_get(endpoint, access_token);
+  if (body.isErr()) return body;
+  const parsed = z.safeParse(activities_schema, body.value);
   if (!parsed.success)
-    return {
-      type: 'error',
-      message: `unexpected litterbot activity response: ${parsed.error.message}`,
-    };
-  return parsed.data.map((a) => ({
-    timestamp: a.timestamp,
-    type: a.type,
-    pet_id: a.petIds?.[0] ?? null,
-    pet_weight: to_pounds(a.petWeight),
-  }));
+    return Result.err(
+      new LitterbotMalformedResponse({
+        message: `unexpected litterbot activity response: ${parsed.error.message}`,
+        endpoint,
+      }),
+    );
+  return Result.ok(
+    parsed.data.map((a) => ({
+      timestamp: a.timestamp,
+      type: a.type,
+      pet_id: a.petIds?.[0] ?? null,
+      pet_weight: to_pounds(a.petWeight),
+    })),
+  );
 }
 
 export async function get_pets(
   access_token: string,
   user_id: string,
-): Promise<pet[] | fetch_error> {
+): Promise<Result<pet[], litterbot_error>> {
   const body = await graphql(PET_GRAPHQL, access_token, GET_PETS_QUERY, {
     userId: user_id,
   });
-  if (is_error(body)) return body;
-  const parsed = z.safeParse(pets_schema, body);
+  if (body.isErr()) return body;
+  const parsed = z.safeParse(pets_schema, body.value);
   if (!parsed.success)
-    return {
-      type: 'error',
-      message: `unexpected litterbot pets response: ${parsed.error.message}`,
-    };
-  return (parsed.data.data.getPetsByUser ?? []).map((p) => ({
-    id: p.petId,
-    name: p.name ?? null,
-  }));
+    return Result.err(
+      new LitterbotMalformedResponse({
+        message: `unexpected litterbot pets response: ${parsed.error.message}`,
+        endpoint: PET_GRAPHQL,
+      }),
+    );
+  return Result.ok(
+    (parsed.data.data.getPetsByUser ?? []).map((p) => ({
+      id: p.petId,
+      name: p.name ?? null,
+    })),
+  );
 }
 
 /*

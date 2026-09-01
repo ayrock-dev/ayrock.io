@@ -1,9 +1,11 @@
 import type { Client } from '@upstash/qstash';
+import { Result } from 'better-result';
 import type { connection } from '../features/connections';
 import * as connections from '../features/connections';
 import * as devices from '../features/devices';
 import * as litterbot from '../features/litterbot';
 import * as workflow from '../features/workflow';
+import type { litterbot_error, QueuePublishFailed } from '../lib/errors';
 import {
   BusyEvent,
   type busy_event,
@@ -112,22 +114,28 @@ export type poll_deps = {
   workflow_url: string;
 };
 
+/*
+ * `Result.ok(token)` when live or refreshed, `Result.ok(null)` when expired with no refresh
+ * token (legal not-linked state), `err` only on a genuine upstream refresh
+ * fault.
+ */
 async function token_for(
   rt: DbRuntime,
   conn: connection,
-): Promise<string | null> {
-  if (conn.expires_at.getTime() > Date.now() + 10_000) return conn.access_token;
-  if (conn.refresh_token === null) return null;
+): Promise<Result<string | null, litterbot_error>> {
+  if (conn.expires_at.getTime() > Date.now() + 10_000)
+    return Result.ok(conn.access_token);
+  if (conn.refresh_token === null) return Result.ok(null);
 
   const result = await litterbot.refresh(conn.refresh_token);
-  if (result.type === 'error') return null;
+  if (result.isErr()) return result;
 
   await connections.set_litterbot_auth(rt, conn.user_id, {
-    access_token: result.token.access_token,
-    refresh_token: result.token.refresh_token,
-    expires_at: new Date(Date.now() + result.token.expires_in * 1000),
+    access_token: result.value.access_token,
+    refresh_token: result.value.refresh_token,
+    expires_at: new Date(Date.now() + result.value.expires_in * 1000),
   });
-  return result.token.access_token;
+  return Result.ok(result.value.access_token);
 }
 
 async function schedule(
@@ -135,27 +143,25 @@ async function schedule(
   deps: poll_deps,
   connection_id: string,
   delay_s: number,
-): Promise<void> {
+): Promise<Result<void, QueuePublishFailed>> {
   const event_id = nanoid();
   await connections.set_poll_state(rt, connection_id, {
     event_id,
     next_event_at: new Date(Date.now() + (delay_s + poll_grace_s) * 1000),
   });
-  try {
-    await deps.qstash.publishJSON({
-      url: deps.poll_url,
-      body: { connection_id, event_id },
-      delay: delay_s,
-      deduplicationId: event_id,
-      retries: 3,
-    });
-  } catch (error) {
+  const published = await workflow.publish_poll(deps.qstash, deps.poll_url, {
+    connection_id,
+    event_id,
+    delay_s,
+  });
+  if (published.isErr()) {
     await connections.set_poll_state(rt, connection_id, {
       event_id: null,
       next_event_at: null,
     });
-    throw error;
+    return published;
   }
+  return Result.ok(undefined);
 }
 
 async function drop(rt: DbRuntime, connection_id: string): Promise<void> {
@@ -170,15 +176,17 @@ async function publish(
   deps: poll_deps,
   conn: connection,
   v: visit,
-): Promise<void> {
+): Promise<Result<void, QueuePublishFailed>> {
   for (const device of await devices.all(rt, conn.user_id)) {
     if (device.access_token === null) continue;
-    await workflow.enqueue(
+    const enqueued = await workflow.enqueue(
       deps.qstash,
       deps.workflow_url,
       to_event(device.id, v),
     );
+    if (enqueued.isErr()) return enqueued;
   }
+  return Result.ok(undefined);
 }
 
 export type poll_outcome =
@@ -188,7 +196,7 @@ export type poll_outcome =
   | { status: 'superseded' }
   | { status: 'unknown' }
   | { status: 'no_token' }
-  | { status: 'error' };
+  | { status: 'error'; reason: string };
 
 type detected = { v: visit; pet_id: string | null } | null;
 
@@ -197,16 +205,16 @@ async function scan(
   robots: litterbot.robot[],
   cursor: string | null,
 ): Promise<
-  { newest: string | null; detected: detected } | litterbot.fetch_error
+  Result<{ newest: string | null; detected: detected }, litterbot_error>
 > {
   let newest = cursor;
   let best: { at: number; v: visit; pet_id: string | null } | null = null;
 
   for (const robot of robots) {
     const activities = await litterbot.get_activity(access_token, robot.serial);
-    if (!Array.isArray(activities)) return activities;
+    if (activities.isErr()) return activities;
 
-    for (const a of activities) {
+    for (const a of activities.value) {
       const at = Date.parse(a.timestamp);
       if (Number.isNaN(at)) continue;
       if (newest === null || at > Date.parse(newest)) newest = a.timestamp;
@@ -227,68 +235,81 @@ async function scan(
     }
   }
 
-  return {
+  return Result.ok({
     newest,
     detected: best ? { v: best.v, pet_id: best.pet_id } : null,
-  };
+  });
 }
 
+/*
+ * Drive one litterbot poll cycle. Expected states are returned as values so the
+ * queue consumer acks them; an upstream whisker fault becomes `error` (the
+ * schedule is dropped and the next cron tick re-arms). Only a queue publish
+ * failure escapes as `Err` for a legitimate qstash retry.
+ */
 export async function handle_poll(
   rt: DbRuntime,
   deps: poll_deps,
   payload: { connection_id: string; event_id: string },
-): Promise<poll_outcome> {
+): Promise<Result<poll_outcome, QueuePublishFailed>> {
   const conn = await connections.get_by_id(rt, payload.connection_id);
-  if (conn?.type !== 'litterbot') return { status: 'unknown' };
-  if (conn.event_id !== payload.event_id) return { status: 'superseded' };
+  if (conn?.type !== 'litterbot') return Result.ok({ status: 'unknown' });
+  if (conn.event_id !== payload.event_id)
+    return Result.ok({ status: 'superseded' });
 
   const token = await token_for(rt, conn);
-  if (!token) {
+  if (token.isErr()) {
     await drop(rt, conn.id);
-    return { status: 'no_token' };
+    return Result.ok({ status: 'error', reason: token.error.message });
+  }
+  if (!token.value) {
+    await drop(rt, conn.id);
+    return Result.ok({ status: 'no_token' });
+  }
+  const access_token = token.value;
+
+  const robots = await litterbot.get_robots(access_token);
+  if (robots.isErr()) {
+    await drop(rt, conn.id);
+    return Result.ok({ status: 'error', reason: robots.error.message });
   }
 
-  const robots = await litterbot.get_robots(token);
-  if (!Array.isArray(robots)) {
+  const result = await scan(access_token, robots.value, conn.cursor);
+  if (result.isErr()) {
     await drop(rt, conn.id);
-    return { status: 'error' };
+    return Result.ok({ status: 'error', reason: result.error.message });
   }
 
-  const result = await scan(token, robots, conn.cursor);
-  if (!('newest' in result)) {
-    await drop(rt, conn.id);
-    return { status: 'error' };
-  }
-
-  await connections.set_cursor(rt, conn.id, result.newest);
+  await connections.set_cursor(rt, conn.id, result.value.newest);
   await drop(rt, conn.id);
 
-  if (conn.cursor === null) return { status: 'primed' };
-  if (result.detected === null) return { status: 'idle' };
+  if (conn.cursor === null) return Result.ok({ status: 'primed' });
+  if (result.value.detected === null) return Result.ok({ status: 'idle' });
 
-  const { v, pet_id } = result.detected;
+  const { v, pet_id } = result.value.detected;
   let pet_name: string | null = null;
   if (pet_id !== null) {
-    const user_id = await litterbot.get_user_id(token);
-    if (typeof user_id === 'string') {
-      const pets = await litterbot.get_pets(token, user_id);
-      if (Array.isArray(pets)) pet_name = litterbot.attribute(pets, pet_id);
+    const user_id = litterbot.get_user_id(access_token);
+    if (user_id.isOk()) {
+      const pets = await litterbot.get_pets(access_token, user_id.value);
+      if (pets.isOk()) pet_name = litterbot.attribute(pets.value, pet_id);
     }
   }
 
-  await publish(rt, deps, conn, { ...v, pet_name });
-  return { status: 'visited' };
+  const published = await publish(rt, deps, conn, { ...v, pet_name });
+  if (published.isErr()) return published;
+  return Result.ok({ status: 'visited' });
 }
 
 export async function ensure_scheduled(
   rt: DbRuntime,
   deps: poll_deps,
   conn: connection,
-): Promise<void> {
+): Promise<Result<void, QueuePublishFailed>> {
   const alive =
     conn.event_id !== null &&
     conn.next_event_at !== null &&
     conn.next_event_at.getTime() > Date.now();
-  if (alive) return;
-  await schedule(rt, deps, conn.id, 0);
+  if (alive) return Result.ok(undefined);
+  return schedule(rt, deps, conn.id, 0);
 }

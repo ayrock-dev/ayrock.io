@@ -1,4 +1,12 @@
+import { Result } from 'better-result';
 import * as z from 'zod/mini';
+import {
+  error_message,
+  SpotifyMalformedResponse,
+  SpotifyRequestFailed,
+  SpotifyUnexpectedStatus,
+  type spotify_error,
+} from '../lib/errors';
 
 const accounts_base = 'https://accounts.spotify.com';
 const api_base = 'https://api.spotify.com/v1';
@@ -16,14 +24,11 @@ export type track = {
   album: string;
 };
 
-export type token_result =
-  | {
-      type: 'ok';
-      access_token: string;
-      expires_in: number;
-      refresh_token?: string;
-    }
-  | { type: 'error'; message: string };
+export type token = {
+  access_token: string;
+  expires_in: number;
+  refresh_token?: string;
+};
 
 export type profile = {
   id: string;
@@ -31,7 +36,7 @@ export type profile = {
   image_url: string | null;
 };
 
-export type now_playing_result =
+export type now_playing =
   | {
       type: 'playing';
       uri: string;
@@ -39,8 +44,7 @@ export type now_playing_result =
       progress_ms: number;
       duration_ms: number;
     }
-  | { type: 'nothing' }
-  | { type: 'error'; message: string };
+  | { type: 'nothing' };
 
 const token_schema = z.object({
   access_token: z.string(),
@@ -83,53 +87,68 @@ export function authorize_url(config: config, state: string): string {
   return `${accounts_base}/authorize?${params.toString()}`;
 }
 
+async function get_json(
+  endpoint: string,
+  init: RequestInit,
+): Promise<Result<unknown, spotify_error>> {
+  const response = await Result.tryPromise({
+    try: () => fetch(endpoint, init),
+    catch: (cause) =>
+      new SpotifyRequestFailed({
+        message: `spotify request to ${endpoint} failed before a response: ${error_message(cause)}`,
+        endpoint,
+        cause,
+      }),
+  });
+  if (response.isErr()) return response;
+
+  if (!response.value.ok)
+    return Result.err(
+      new SpotifyUnexpectedStatus({
+        message: `spotify ${endpoint} returned ${response.value.status}`,
+        endpoint,
+        status: response.value.status,
+        body: await response.value.text(),
+      }),
+    );
+
+  return Result.ok(await response.value.json());
+}
+
 async function post_token(
   config: config,
   body: Record<string, string>,
-): Promise<token_result> {
-  let response: Response;
-  try {
-    response = await fetch(`${accounts_base}/api/token`, {
-      method: 'POST',
-      headers: {
-        authorization: basic_auth(config),
-        'content-type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams(body).toString(),
-    });
-  } catch (error) {
-    return {
-      type: 'error',
-      message: `spotify token request failed: ${String(error)}`,
-    };
-  }
+): Promise<Result<token, spotify_error>> {
+  const endpoint = `${accounts_base}/api/token`;
+  const json = await get_json(endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: basic_auth(config),
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams(body).toString(),
+  });
+  if (json.isErr()) return json;
 
-  if (!response.ok) {
-    return {
-      type: 'error',
-      message: `spotify token endpoint returned ${response.status}: ${await response.text()}`,
-    };
-  }
-
-  const parsed = z.safeParse(token_schema, await response.json());
-  if (!parsed.success) {
-    return {
-      type: 'error',
-      message: `unexpected spotify token response: ${parsed.error.message}`,
-    };
-  }
-  return {
-    type: 'ok',
+  const parsed = z.safeParse(token_schema, json.value);
+  if (!parsed.success)
+    return Result.err(
+      new SpotifyMalformedResponse({
+        message: `unexpected spotify token response: ${parsed.error.message}`,
+        endpoint,
+      }),
+    );
+  return Result.ok({
     access_token: parsed.data.access_token,
     expires_in: parsed.data.expires_in,
     refresh_token: parsed.data.refresh_token,
-  };
+  });
 }
 
 export function exchange_code(
   config: config,
   code: string,
-): Promise<token_result> {
+): Promise<Result<token, spotify_error>> {
   return post_token(config, {
     grant_type: 'authorization_code',
     code,
@@ -140,7 +159,7 @@ export function exchange_code(
 export function refresh_access_token(
   config: config,
   refresh_token: string,
-): Promise<token_result> {
+): Promise<Result<token, spotify_error>> {
   return post_token(config, {
     grant_type: 'refresh_token',
     refresh_token,
@@ -149,61 +168,69 @@ export function refresh_access_token(
 
 export async function get_profile(
   access_token: string,
-): Promise<profile | null> {
-  let response: Response;
-  try {
-    response = await fetch(`${api_base}/me`, {
-      headers: { authorization: `Bearer ${access_token}` },
-    });
-  } catch {
-    return null;
-  }
-  if (!response.ok) return null;
-  const parsed = z.safeParse(profile_schema, await response.json());
-  if (!parsed.success) return null;
-  return {
+): Promise<Result<profile, spotify_error>> {
+  const endpoint = `${api_base}/me`;
+  const json = await get_json(endpoint, {
+    headers: { authorization: `Bearer ${access_token}` },
+  });
+  if (json.isErr()) return json;
+
+  const parsed = z.safeParse(profile_schema, json.value);
+  if (!parsed.success)
+    return Result.err(
+      new SpotifyMalformedResponse({
+        message: `unexpected spotify profile response: ${parsed.error.message}`,
+        endpoint,
+      }),
+    );
+  return Result.ok({
     id: parsed.data.id,
     display_name: parsed.data.display_name,
     image_url: parsed.data.images[0]?.url ?? null,
-  };
+  });
 }
 
 export async function now_playing(
   access_token: string,
-): Promise<now_playing_result> {
-  let response: Response;
-  try {
-    response = await fetch(`${api_base}/me/player/currently-playing`, {
-      headers: { authorization: `Bearer ${access_token}` },
-    });
-  } catch (error) {
-    return {
-      type: 'error',
-      message: `spotify now-playing request failed: ${String(error)}`,
-    };
-  }
+): Promise<Result<now_playing, spotify_error>> {
+  const endpoint = `${api_base}/me/player/currently-playing`;
+  const response = await Result.tryPromise({
+    try: () =>
+      fetch(endpoint, { headers: { authorization: `Bearer ${access_token}` } }),
+    catch: (cause) =>
+      new SpotifyRequestFailed({
+        message: `spotify now-playing request failed before a response: ${error_message(cause)}`,
+        endpoint,
+        cause,
+      }),
+  });
+  if (response.isErr()) return response;
 
-  if (response.status === 204) return { type: 'nothing' };
+  if (response.value.status === 204) return Result.ok({ type: 'nothing' });
 
-  if (!response.ok) {
-    return {
-      type: 'error',
-      message: `spotify now-playing returned ${response.status}: ${await response.text()}`,
-    };
-  }
+  if (!response.value.ok)
+    return Result.err(
+      new SpotifyUnexpectedStatus({
+        message: `spotify now-playing returned ${response.value.status}`,
+        endpoint,
+        status: response.value.status,
+        body: await response.value.text(),
+      }),
+    );
 
-  const parsed = z.safeParse(now_playing_schema, await response.json());
-  if (!parsed.success) {
-    return {
-      type: 'error',
-      message: `unexpected now-playing response: ${parsed.error.message}`,
-    };
-  }
+  const parsed = z.safeParse(now_playing_schema, await response.value.json());
+  if (!parsed.success)
+    return Result.err(
+      new SpotifyMalformedResponse({
+        message: `unexpected now-playing response: ${parsed.error.message}`,
+        endpoint,
+      }),
+    );
 
   const { is_playing, item, progress_ms } = parsed.data;
-  if (!is_playing || !item) return { type: 'nothing' };
+  if (!is_playing || !item) return Result.ok({ type: 'nothing' });
 
-  return {
+  return Result.ok({
     type: 'playing',
     uri: item.uri,
     track: {
@@ -213,5 +240,5 @@ export async function now_playing(
     },
     progress_ms: progress_ms ?? 0,
     duration_ms: item.duration_ms,
-  };
+  });
 }

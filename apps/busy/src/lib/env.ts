@@ -1,4 +1,6 @@
+import { Result } from 'better-result';
 import * as z from 'zod/mini';
+import { EnvInvalid } from './errors';
 
 const env_schema = z.object({
   API_HOST: z.string(),
@@ -11,8 +13,16 @@ const env_schema = z.object({
 
 export type Env = z.infer<typeof env_schema>;
 
-export function parse_env(env: unknown): Env {
-  return z.parse(env_schema, env);
+export function parse_env(env: unknown): Result<Env, EnvInvalid> {
+  const parsed = z.safeParse(env_schema, env);
+  if (!parsed.success)
+    return Result.err(
+      new EnvInvalid({
+        message: `worker env failed validation; deploy secrets/vars are missing or malformed: ${parsed.error.message}`,
+        cause: parsed.error,
+      }),
+    );
+  return Result.ok(parsed.data);
 }
 
 export function workflow_url(env: Env): string {

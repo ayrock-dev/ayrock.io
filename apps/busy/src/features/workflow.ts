@@ -1,21 +1,14 @@
 import type { Client } from '@upstash/qstash';
+import { Result } from 'better-result';
 import { DebugEvent } from '../adapters/debug';
 import { LitterbotEvent } from '../adapters/litterbot';
 import { SpotifyEvent } from '../adapters/spotify';
+import { error_message, QueuePublishFailed } from '../lib/errors';
 import type { busy_event, draw_frame } from '../lib/events';
 import type { DbRuntime } from '../lib/prisma';
 import { event_queue_name } from '../lib/upstash';
 import * as busybar from './busybar';
 import * as devices from './devices';
-
-function is_conflict(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'status' in error &&
-    (error as { status: unknown }).status === 409
-  );
-}
 
 function render(event: busy_event): draw_frame {
   switch (event.type) {
@@ -51,14 +44,49 @@ function render(event: busy_event): draw_frame {
   }
 }
 
-export async function enqueue(
+export function enqueue(
   qstash: Client,
   url: string,
   event: busy_event,
-): Promise<void> {
-  await qstash
-    .queue({ queueName: event_queue_name })
-    .enqueueJSON({ url, body: event, retries: 3 });
+): Promise<Result<void, QueuePublishFailed>> {
+  return Result.tryPromise({
+    try: async () => {
+      await qstash
+        .queue({ queueName: event_queue_name })
+        .enqueueJSON({ url, body: event, retries: 3 });
+    },
+    catch: (cause) =>
+      new QueuePublishFailed({
+        message: `failed to enqueue draw event for device ${event.device_id}: ${error_message(cause)}`,
+        cause,
+      }),
+  });
+}
+
+export function publish_poll(
+  qstash: Client,
+  url: string,
+  payload: { connection_id: string; event_id: string; delay_s: number },
+): Promise<Result<void, QueuePublishFailed>> {
+  return Result.tryPromise({
+    try: async () => {
+      await qstash.publishJSON({
+        url,
+        body: {
+          connection_id: payload.connection_id,
+          event_id: payload.event_id,
+        },
+        delay: payload.delay_s,
+        deduplicationId: payload.event_id,
+        retries: 3,
+      });
+    },
+    catch: (cause) =>
+      new QueuePublishFailed({
+        message: `failed to schedule poll for connection ${payload.connection_id}: ${error_message(cause)}`,
+        cause,
+      }),
+  });
 }
 
 export type draw_result =
@@ -69,9 +97,8 @@ export type draw_result =
 
 /*
  * Draw a single event. Expected, non-retryable outcomes (missing token, busy
- * display, a frame the device rejects) are returned as values, not thrown, so
- * the queue consumer can ack them. Only unexpected faults (e.g. DB access)
- * propagate.
+ * display, a frame the device rejects) are returned as values so the queue
+ * consumer can ack them. Only unexpected faults (e.g. DB access) propagate.
  */
 export async function handle(
   rt: DbRuntime,
@@ -80,11 +107,13 @@ export async function handle(
   const device = await devices.get(rt, event.device_id);
   const token = device?.access_token ?? null;
   if (!token) return { status: 'no_token' };
-  try {
-    await busybar.draw(token, render(event));
-    return { status: 'ok' };
-  } catch (error) {
-    if (is_conflict(error)) return { status: 'conflict' };
-    return { status: 'draw_failed', message: String(error) };
-  }
+
+  const drawn = await busybar.draw(token, render(event));
+  return drawn.match({
+    ok: (): draw_result => ({ status: 'ok' }),
+    err: (error): draw_result =>
+      error._tag === 'BusybarBusy'
+        ? { status: 'conflict' }
+        : { status: 'draw_failed', message: error.message },
+  });
 }

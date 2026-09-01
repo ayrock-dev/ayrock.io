@@ -1,4 +1,5 @@
 import type { Client } from '@upstash/qstash';
+import { Result } from 'better-result';
 import type { connection } from '../features/connections';
 import * as connections from '../features/connections';
 import * as devices from '../features/devices';
@@ -6,6 +7,7 @@ import type { config, track } from '../features/spotify';
 import * as spotify from '../features/spotify';
 import * as workflow from '../features/workflow';
 import { to_printable_ascii } from '../lib/ascii';
+import type { QueuePublishFailed, spotify_error } from '../lib/errors';
 import {
   BusyEvent,
   type busy_event,
@@ -80,35 +82,43 @@ const min_delay_s = 5;
 const error_retry_s = 15;
 const grace_ms = 30_000;
 
+/*
+ * Resolve a usable access token. `Result.ok(token)` when live or refreshed, `Result.ok(null)`
+ * when the token is expired and no refresh token exists (a legal not-linked
+ * state), and `err` only for a genuine upstream spotify fault during refresh —
+ * which the caller reschedules rather than treating as terminal.
+ */
 async function access_token_for(
   rt: DbRuntime,
   conn: connection,
   config: config,
-): Promise<string | null> {
-  if (conn.expires_at.getTime() > Date.now() + 10_000) return conn.access_token;
-  if (conn.refresh_token === null) return null;
+): Promise<Result<string | null, spotify_error>> {
+  if (conn.expires_at.getTime() > Date.now() + 10_000)
+    return Result.ok(conn.access_token);
+  if (conn.refresh_token === null) return Result.ok(null);
 
   const result = await spotify.refresh_access_token(config, conn.refresh_token);
-  if (result.type === 'error') return null;
+  if (result.isErr()) return result;
 
   await connections.set_spotify_auth(rt, conn.user_id, {
-    access_token: result.access_token,
-    expires_at: new Date(Date.now() + result.expires_in * 1000),
-    ...(result.refresh_token !== undefined
-      ? { refresh_token: result.refresh_token }
+    access_token: result.value.access_token,
+    expires_at: new Date(Date.now() + result.value.expires_in * 1000),
+    ...(result.value.refresh_token !== undefined
+      ? { refresh_token: result.value.refresh_token }
       : {}),
   });
-  return result.access_token;
+  return Result.ok(result.value.access_token);
 }
 
 export async function profile(
   rt: DbRuntime,
   conn: connection,
   config: config,
-): Promise<spotify.profile | null> {
+): Promise<Result<spotify.profile | null, spotify_error>> {
   const token = await access_token_for(rt, conn, config);
-  if (!token) return null;
-  return spotify.get_profile(token);
+  if (token.isErr()) return token;
+  if (!token.value) return Result.ok(null);
+  return spotify.get_profile(token.value);
 }
 
 export function to_event(
@@ -142,7 +152,7 @@ async function schedule(
   connection_id: string,
   delay_s: number,
   armed_uri: string | null,
-): Promise<void> {
+): Promise<Result<void, QueuePublishFailed>> {
   const event_id = nanoid();
   await connections.set_poll_state(
     rt,
@@ -153,23 +163,23 @@ async function schedule(
     },
     { value: armed_uri },
   );
-  try {
-    await deps.qstash.publishJSON({
-      url: deps.poll_url,
-      body: { connection_id, event_id },
-      delay: delay_s,
-      deduplicationId: event_id,
-      retries: 3,
-    });
-  } catch (error) {
+  const published = await workflow.publish_poll(deps.qstash, deps.poll_url, {
+    connection_id,
+    event_id,
+    delay_s,
+  });
+  if (published.isErr()) {
+    // Roll the armed state back so the next cron tick re-arms from scratch
+    // rather than believing a poll is already in flight.
     await connections.set_poll_state(
       rt,
       connection_id,
       { event_id: null, next_event_at: null },
       { value: null },
     );
-    throw error;
+    return published;
   }
+  return Result.ok(undefined);
 }
 
 async function drop(rt: DbRuntime, connection_id: string): Promise<void> {
@@ -181,27 +191,28 @@ async function drop(rt: DbRuntime, connection_id: string): Promise<void> {
   );
 }
 
-type playing = Extract<spotify.now_playing_result, { type: 'playing' }>;
+type playing = Extract<spotify.now_playing, { type: 'playing' }>;
 
 async function draw_and_arm(
   rt: DbRuntime,
   deps: poll_deps,
   conn: connection,
   state: playing,
-): Promise<void> {
+): Promise<Result<void, QueuePublishFailed>> {
   const remaining_ms = Math.max(state.duration_ms - state.progress_ms, 0);
   const delay_s = delay_for(remaining_ms);
 
   for (const device of await devices.all(rt, conn.user_id)) {
     if (device.access_token === null) continue;
-    await workflow.enqueue(
+    const enqueued = await workflow.enqueue(
       deps.qstash,
       deps.workflow_url,
       to_event(device.id, state.track, delay_s),
     );
+    if (enqueued.isErr()) return enqueued;
   }
 
-  await schedule(rt, deps, conn.id, delay_s, state.uri);
+  return schedule(rt, deps, conn.id, delay_s, state.uri);
 }
 
 export type poll_outcome =
@@ -210,59 +221,81 @@ export type poll_outcome =
   | { status: 'superseded' }
   | { status: 'unknown' }
   | { status: 'no_token' }
-  | { status: 'error' };
+  | { status: 'error'; reason: string };
 
+/*
+ * Drive one poll cycle. Expected states (superseded, idle, not-linked, a
+ * transient spotify fault) are returned as `poll_outcome` values so the queue
+ * consumer acks them. Only a queue publish failure escapes as `Err`, letting the
+ * endpoint surface a 500 for a legitimate qstash retry.
+ */
 export async function handle_poll(
   rt: DbRuntime,
   deps: poll_deps,
   payload: { connection_id: string; event_id: string },
-): Promise<poll_outcome> {
+): Promise<Result<poll_outcome, QueuePublishFailed>> {
   const conn = await connections.get_by_id(rt, payload.connection_id);
-  if (conn?.type !== 'spotify') return { status: 'unknown' };
-  if (conn.event_id !== payload.event_id) return { status: 'superseded' };
+  if (conn?.type !== 'spotify') return Result.ok({ status: 'unknown' });
+  if (conn.event_id !== payload.event_id)
+    return Result.ok({ status: 'superseded' });
+
+  // On a transient upstream fault, re-arm a short retry instead of dropping the
+  // schedule; only a queue publish failure escapes.
+  const retry = async (
+    reason: string,
+  ): Promise<Result<poll_outcome, QueuePublishFailed>> => {
+    const rescheduled = await schedule(
+      rt,
+      deps,
+      conn.id,
+      error_retry_s,
+      conn.cursor,
+    );
+    if (rescheduled.isErr()) return rescheduled;
+    return Result.ok({ status: 'error', reason });
+  };
 
   const token = await access_token_for(rt, conn, deps.config);
-  if (!token) {
+  if (token.isErr()) return retry(token.error.message);
+  if (!token.value) {
     await drop(rt, conn.id);
-    return { status: 'no_token' };
+    return Result.ok({ status: 'no_token' });
   }
 
-  const state = await spotify.now_playing(token);
-  if (state.type === 'error') {
-    await schedule(rt, deps, conn.id, error_retry_s, conn.cursor);
-    return { status: 'error' };
-  }
-  if (state.type === 'nothing') {
+  const state = await spotify.now_playing(token.value);
+  if (state.isErr()) return retry(state.error.message);
+  if (state.value.type === 'nothing') {
     await drop(rt, conn.id);
-    return { status: 'idle' };
+    return Result.ok({ status: 'idle' });
   }
 
-  await draw_and_arm(rt, deps, conn, state);
-  return { status: 'playing' };
+  const armed = await draw_and_arm(rt, deps, conn, state.value);
+  if (armed.isErr()) return armed;
+  return Result.ok({ status: 'playing' });
 }
 
 export async function ensure_scheduled(
   rt: DbRuntime,
   deps: poll_deps,
   conn: connection,
-): Promise<void> {
+): Promise<Result<void, QueuePublishFailed>> {
   const alive =
     conn.event_id !== null &&
     conn.next_event_at !== null &&
     conn.next_event_at.getTime() > Date.now();
 
   const token = await access_token_for(rt, conn, deps.config);
-  if (!token) return;
+  if (token.isErr() || !token.value) return Result.ok(undefined);
 
-  const state = await spotify.now_playing(token);
-  if (state.type === 'error') return;
+  const state = await spotify.now_playing(token.value);
+  if (state.isErr()) return Result.ok(undefined);
 
-  if (state.type === 'nothing') {
+  if (state.value.type === 'nothing') {
     if (alive) await drop(rt, conn.id);
-    return;
+    return Result.ok(undefined);
   }
 
-  if (alive && state.uri === conn.cursor) return;
+  if (alive && state.value.uri === conn.cursor) return Result.ok(undefined);
 
-  await draw_and_arm(rt, deps, conn, state);
+  return draw_and_arm(rt, deps, conn, state.value);
 }
